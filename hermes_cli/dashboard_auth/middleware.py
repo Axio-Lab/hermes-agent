@@ -17,6 +17,7 @@ binds.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Awaitable, Callable
 
 from fastapi import Request
@@ -180,6 +181,15 @@ async def gated_auth_middleware(
     """
     if not getattr(request.app.state, "auth_required", False):
         return await call_next(request)
+
+    # Headless control planes (Verxio API proxying into an isolated runtime
+    # container) authenticate with the injected HERMES_DASHBOARD_SESSION_TOKEN
+    # via X-Hermes-Session-Token / Bearer, not an interactive cookie session.
+    if os.environ.get("HERMES_DASHBOARD_SESSION_TOKEN"):
+        from hermes_cli.web_server import _has_valid_session_token
+
+        if _has_valid_session_token(request):
+            return await call_next(request)
 
     path = request.url.path
     if _path_is_public(path):

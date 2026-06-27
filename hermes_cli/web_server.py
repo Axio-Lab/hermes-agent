@@ -11220,6 +11220,20 @@ def _ws_auth_reason(ws: "WebSocket") -> tuple[Optional[str], str]:
     """
     auth_required = bool(getattr(app.state, "auth_required", False))
     if auth_required:
+        # Headless control planes (Verxio API proxying into an isolated runtime
+        # container) authenticate with the injected HERMES_DASHBOARD_SESSION_TOKEN
+        # via ?token= or X-Hermes-Session-Token, not OAuth cookies/tickets.
+        if os.environ.get("HERMES_DASHBOARD_SESSION_TOKEN"):
+            session_header = ws.headers.get(_SESSION_HEADER_NAME, "")
+            if session_header and hmac.compare_digest(
+                session_header.encode(),
+                _SESSION_TOKEN.encode(),
+            ):
+                return None, "token"
+            token = ws.query_params.get("token", "")
+            if token and hmac.compare_digest(token.encode(), _SESSION_TOKEN.encode()):
+                return None, "token"
+
         # Lazy import — keeps this function importable in test harnesses
         # that don't bring in the dashboard_auth layer.
         from hermes_cli.dashboard_auth.audit import AuditEvent, audit_log
@@ -12965,7 +12979,7 @@ def start_server(
         # provider to be registered, else fail closed — there is no longer an
         # escape hatch that serves the dashboard without authentication.
         from hermes_cli.dashboard_auth import list_providers
-        if not list_providers():
+        if not list_providers() and not os.environ.get("HERMES_DASHBOARD_SESSION_TOKEN"):
             # Surface the *specific* reason any bundled provider declined
             # to register (e.g. missing HERMES_DASHBOARD_OAUTH_CLIENT_ID).
             # Each provider plugin that ships with Hermes Agent exposes a
@@ -13010,11 +13024,18 @@ def start_server(
                 f"engages on non-loopback binds, but no auth providers are "
                 f"registered.\n\n" + _fix_hint
             )
-        _log.info(
-            "Dashboard binding to %s with auth gate enabled. Providers: %s",
-            host,
-            ", ".join(p.name for p in list_providers()),
-        )
+        if not list_providers() and os.environ.get("HERMES_DASHBOARD_SESSION_TOKEN"):
+            _log.info(
+                "Dashboard binding to %s with session-token proxy auth "
+                "(HERMES_DASHBOARD_SESSION_TOKEN set).",
+                host,
+            )
+        elif list_providers():
+            _log.info(
+                "Dashboard binding to %s with auth gate enabled. Providers: %s",
+                host,
+                ", ".join(p.name for p in list_providers()),
+            )
 
     # Record the bound host so host_header_middleware can validate incoming
     # Host headers against it. Defends against DNS rebinding (GHSA-ppp5-vxwm-4cf7).
