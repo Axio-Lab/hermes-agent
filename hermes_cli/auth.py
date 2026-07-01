@@ -1438,6 +1438,53 @@ def clear_provider_auth(provider_id: Optional[str] = None) -> bool:
     return True
 
 
+def clear_oauth_connect_suppressions(provider_id: str) -> None:
+    """Clear suppression markers when the user explicitly starts an OAuth connect."""
+    try:
+        auth_store = _load_auth_store()
+        suppressed = auth_store.get("suppressed_sources", {})
+        for src in list(suppressed.get(provider_id, []) or []):
+            unsuppress_credential_source(provider_id, src)
+    except Exception:
+        pass
+
+
+def remove_all_provider_credentials(provider_id: str) -> bool:
+    """Remove every pooled credential for a provider, mirroring ``hermes auth remove``.
+
+    Pool removal alone is not enough for OAuth providers: singleton state and
+    external sources (Codex CLI auth.json, Claude Code creds, etc.) would
+    re-seed on the next ``load_pool()`` unless the registered removal steps
+    run and suppress the source.
+    """
+    from agent.credential_pool import load_pool
+    from agent.credential_sources import find_removal_step
+
+    normalized = str(provider_id or "").strip()
+    if not normalized:
+        return False
+
+    pool = load_pool(normalized)
+    removed_any = False
+
+    while pool.has_credentials():
+        index = len(pool.entries())
+        removed = pool.remove_index(index)
+        if removed is None:
+            break
+        removed_any = True
+        step = find_removal_step(normalized, removed.source)
+        if step is not None:
+            result = step.remove_fn(normalized, removed)
+            if result.suppress:
+                suppress_credential_source(normalized, removed.source)
+
+    cleared_auth = clear_provider_auth(normalized)
+    if normalized == "nous":
+        invalidate_nous_auth_status_cache()
+    return removed_any or cleared_auth
+
+
 def deactivate_provider() -> None:
     """
     Clear active_provider in auth.json without deleting credentials.
@@ -3705,11 +3752,14 @@ def resolve_codex_runtime_credentials(
             "codex_auth_missing_refresh_token",
             "codex_auth_invalid_shape",
         }:
-            imported = _recover_codex_tokens_from_cli(str(getattr(exc, "code", None) or "auth_error"))
-            if imported:
-                data = {"tokens": imported, "last_refresh": imported.get("last_refresh")}
-            else:
+            if is_source_suppressed("openai-codex", "device_code"):
                 data = None
+            else:
+                imported = _recover_codex_tokens_from_cli(str(getattr(exc, "code", None) or "auth_error"))
+                if imported:
+                    data = {"tokens": imported, "last_refresh": imported.get("last_refresh")}
+                else:
+                    data = None
         else:
             data = None
 
@@ -5911,6 +5961,12 @@ def get_codex_auth_status() -> Dict[str, Any]:
     Checks the credential pool first (where `hermes auth` stores credentials),
     then falls back to the legacy provider state.
     """
+    if is_source_suppressed("openai-codex", "device_code"):
+        return {
+            "logged_in": False,
+            "auth_store": str(_auth_file_path()),
+        }
+
     # Check credential pool first — this is where `hermes auth` and
     # `hermes model` store device_code tokens.
     try:
@@ -5971,6 +6027,12 @@ def get_codex_auth_status() -> Dict[str, Any]:
 
 
 def get_xai_oauth_auth_status() -> Dict[str, Any]:
+    if is_source_suppressed("xai-oauth", "loopback_pkce"):
+        return {
+            "logged_in": False,
+            "auth_store": str(_auth_file_path()),
+        }
+
     try:
         from agent.credential_pool import load_pool
 

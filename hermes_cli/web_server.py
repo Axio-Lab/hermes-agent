@@ -4036,29 +4036,43 @@ def _denormalize_config_from_web(config: Dict[str, Any]) -> Dict[str, Any]:
             ctx_override = 0
 
     model_val = config.get("model")
-    if isinstance(model_val, str) and model_val:
-        # Read the current disk config to recover model subkeys
-        try:
-            disk_config = load_config()
-            disk_model = disk_config.get("model")
-            if isinstance(disk_model, dict):
-                # Preserve all subkeys, update default with the new value
-                disk_model["default"] = model_val
-                # Write context_length into the model dict (0 = remove/auto)
-                if ctx_override > 0:
-                    disk_model["context_length"] = ctx_override
+    if isinstance(model_val, str):
+        if not model_val:
+            # Empty string from the normalized GET response must not overwrite a
+            # valid on-disk model dict — that regression wiped hosted Verxio's
+            # Qwen assignment (model: '' in config.yaml → "No model" in UI).
+            try:
+                disk_config = load_config()
+                disk_model = disk_config.get("model")
+                if isinstance(disk_model, dict) and str(disk_model.get("default") or "").strip():
+                    config["model"] = disk_model
                 else:
-                    disk_model.pop("context_length", None)
-                config["model"] = disk_model
-            # Model was previously a bare string — upgrade to dict if
-            # user is setting a context_length override
-            elif ctx_override > 0:
-                config["model"] = {
-                    "default": model_val,
-                    "context_length": ctx_override,
-                }
-        except Exception:
-            pass  # can't read disk config — just use the string form
+                    config.pop("model", None)
+            except Exception:
+                config.pop("model", None)
+        else:
+            # Read the current disk config to recover model subkeys
+            try:
+                disk_config = load_config()
+                disk_model = disk_config.get("model")
+                if isinstance(disk_model, dict):
+                    # Preserve all subkeys, update default with the new value
+                    disk_model["default"] = model_val
+                    # Write context_length into the model dict (0 = remove/auto)
+                    if ctx_override > 0:
+                        disk_model["context_length"] = ctx_override
+                    else:
+                        disk_model.pop("context_length", None)
+                    config["model"] = disk_model
+                # Model was previously a bare string — upgrade to dict if
+                # user is setting a context_length override
+                elif ctx_override > 0:
+                    config["model"] = {
+                        "default": model_val,
+                        "context_length": ctx_override,
+                    }
+            except Exception:
+                pass  # can't read disk config — just use the string form
     return config
 
 
@@ -6042,20 +6056,17 @@ async def disconnect_oauth_provider(
                     cleared = True
             except Exception:
                 pass
-            # Also clear the credential pool entry if present.
             try:
-                from hermes_cli.auth import clear_provider_auth
-                cleared = clear_provider_auth("anthropic") or cleared
+                from hermes_cli.auth import remove_all_provider_credentials
+                cleared = remove_all_provider_credentials("anthropic") or cleared
             except Exception:
                 pass
             _log.info("oauth/disconnect: %s", provider_id)
             return {"ok": bool(cleared), "provider": provider_id}
 
         try:
-            from hermes_cli.auth import clear_provider_auth, invalidate_nous_auth_status_cache
-            cleared = clear_provider_auth(provider_id)
-            if provider_id == "nous":
-                invalidate_nous_auth_status_cache()
+            from hermes_cli.auth import remove_all_provider_credentials
+            cleared = remove_all_provider_credentials(provider_id)
             _log.info("oauth/disconnect: %s (cleared=%s)", provider_id, cleared)
             return {"ok": bool(cleared), "provider": provider_id}
         except Exception as e:
@@ -6353,6 +6364,93 @@ def _submit_anthropic_pkce(
     return {"ok": True, "status": "approved"}
 
 
+def _submit_xai_loopback_paste(
+    session_id: str,
+    callback_input: str,
+    profile: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Finish xAI OAuth from a pasted callback URL (remote / Docker hosted)."""
+    from datetime import datetime, timezone
+
+    from hermes_cli import auth as hauth
+
+    with _oauth_sessions_lock:
+        sess = _oauth_sessions.get(session_id)
+    if not sess or sess["provider"] != "xai-oauth" or sess["flow"] != "loopback":
+        raise HTTPException(status_code=404, detail="Unknown or expired session")
+    if not sess.get("manual_paste"):
+        raise HTTPException(status_code=400, detail="Session is not a manual-paste flow")
+    if sess["status"] != "pending":
+        return {"ok": False, "status": sess["status"], "message": sess.get("error_message")}
+
+    callback = hauth._parse_pasted_callback(callback_input)
+    if callback.get("error"):
+        detail = callback.get("error_description") or callback["error"]
+        with _oauth_sessions_lock:
+            sess["status"] = "error"
+            sess["error_message"] = f"xAI authorization failed: {detail}"
+        return {"ok": False, "status": "error", "message": sess["error_message"]}
+
+    expected_state = sess.get("state")
+    callback_state = callback.get("state")
+    if expected_state and callback_state and callback_state != expected_state:
+        with _oauth_sessions_lock:
+            sess["status"] = "error"
+            sess["error_message"] = "xAI authorization failed: state mismatch."
+        return {"ok": False, "status": "error", "message": sess["error_message"]}
+
+    code = str(callback.get("code") or "").strip()
+    if not code:
+        with _oauth_sessions_lock:
+            sess["status"] = "error"
+            sess["error_message"] = "No authorization code found in pasted callback."
+        return {"ok": False, "status": "error", "message": sess["error_message"]}
+
+    try:
+        payload = hauth._xai_oauth_exchange_code_for_tokens(
+            token_endpoint=sess["token_endpoint"],
+            code=code,
+            redirect_uri=sess["redirect_uri"],
+            code_verifier=sess["verifier"],
+            code_challenge=sess["challenge"],
+        )
+        access_token = str(payload.get("access_token", "") or "").strip()
+        refresh_token = str(payload.get("refresh_token", "") or "").strip()
+        if not access_token or not refresh_token:
+            raise RuntimeError("xAI token exchange did not return the expected tokens.")
+        base_url = hauth._xai_validate_inference_base_url(
+            os.getenv("HERMES_XAI_BASE_URL", "").strip().rstrip("/")
+            or os.getenv("XAI_BASE_URL", "").strip().rstrip("/"),
+            fallback=hauth.DEFAULT_XAI_OAUTH_BASE_URL,
+        )
+        last_refresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        tokens = {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "id_token": str(payload.get("id_token", "") or "").strip(),
+            "expires_in": payload.get("expires_in"),
+            "token_type": str(payload.get("token_type") or "Bearer").strip() or "Bearer",
+        }
+        with _profile_scope(_oauth_session_profile(session_id, profile)):
+            hauth._save_xai_oauth_tokens(
+                tokens,
+                discovery=sess.get("discovery"),
+                redirect_uri=sess["redirect_uri"],
+                last_refresh=last_refresh,
+            )
+            _add_xai_oauth_pool_entry(access_token, refresh_token, base_url, last_refresh)
+    except Exception as exc:
+        with _oauth_sessions_lock:
+            sess["status"] = "error"
+            sess["error_message"] = f"xAI token exchange failed: {exc}"
+        return {"ok": False, "status": "error", "message": sess["error_message"]}
+
+    with _oauth_sessions_lock:
+        sess["status"] = "approved"
+    _log.info("oauth/loopback-paste: xai-oauth login completed (session=%s)", session_id)
+    return {"ok": True, "status": "approved"}
+
+
 async def _start_device_code_flow(
     provider_id: str,
     profile: Optional[str] = None,
@@ -6538,6 +6636,59 @@ async def _start_device_code_flow(
 _XAI_LOOPBACK_TIMEOUT_SECONDS = 300.0
 
 
+def _loopback_oauth_needs_manual_paste() -> bool:
+    """True when the browser cannot reach the runtime's 127.0.0.1 callback listener."""
+    from hermes_cli.auth import _is_remote_session
+
+    if _is_remote_session():
+        return True
+    if os.path.exists("/.dockerenv"):
+        return True
+    if os.getenv("VERXIO_HOSTED", "").strip().lower() in {"1", "true", "yes"}:
+        return True
+    return False
+
+
+def _start_xai_manual_paste_flow(profile: Optional[str] = None) -> Dict[str, Any]:
+    """Begin xAI OAuth without a loopback listener — user pastes the callback URL."""
+    from hermes_cli import auth as hauth
+
+    discovery = hauth._xai_oauth_discovery()
+    redirect_uri = (
+        f"http://{hauth.XAI_OAUTH_REDIRECT_HOST}:{hauth.XAI_OAUTH_REDIRECT_PORT}"
+        f"{hauth.XAI_OAUTH_REDIRECT_PATH}"
+    )
+    hauth._xai_validate_loopback_redirect_uri(redirect_uri)
+    verifier = hauth._oauth_pkce_code_verifier()
+    challenge = hauth._oauth_pkce_code_challenge(verifier)
+    state = secrets.token_hex(16)
+    nonce = secrets.token_hex(16)
+    authorize_url = hauth._xai_oauth_build_authorize_url(
+        authorization_endpoint=discovery["authorization_endpoint"],
+        redirect_uri=redirect_uri,
+        code_challenge=challenge,
+        state=state,
+        nonce=nonce,
+    )
+
+    sid, sess = _new_oauth_session("xai-oauth", "loopback", profile=profile)
+    sess["manual_paste"] = True
+    sess["redirect_uri"] = redirect_uri
+    sess["verifier"] = verifier
+    sess["challenge"] = challenge
+    sess["state"] = state
+    sess["token_endpoint"] = discovery["token_endpoint"]
+    sess["discovery"] = discovery
+    sess["expires_at"] = time.time() + _XAI_LOOPBACK_TIMEOUT_SECONDS
+    return {
+        "session_id": sid,
+        "flow": "loopback",
+        "auth_url": authorize_url,
+        "expires_in": int(_XAI_LOOPBACK_TIMEOUT_SECONDS),
+        "manual_paste": True,
+    }
+
+
 def _start_xai_loopback_flow(profile: Optional[str] = None) -> Dict[str, Any]:
     """Begin the xAI loopback PKCE flow.
 
@@ -6545,6 +6696,9 @@ def _start_xai_loopback_flow(profile: Optional[str] = None) -> Dict[str, Any]:
     background worker that waits for the redirect and finishes the exchange.
     Returns the authorize URL for the client to open in the browser.
     """
+    if _loopback_oauth_needs_manual_paste():
+        return _start_xai_manual_paste_flow(profile=profile)
+
     from hermes_cli import auth as hauth
 
     discovery = hauth._xai_oauth_discovery()
@@ -7031,6 +7185,11 @@ async def start_oauth_login(
             detail=f"{provider_id} uses an external CLI; run `{catalog_entry['cli_command']}` manually",
         )
     try:
+        from hermes_cli.auth import clear_oauth_connect_suppressions
+        clear_oauth_connect_suppressions(provider_id)
+    except Exception:
+        pass
+    try:
         # The pkce branch is gated on provider_id == "anthropic" because
         # `_start_anthropic_pkce()` is hardcoded to the Anthropic flow.
         # Routing any other future pkce-flagged provider through it would
@@ -7070,6 +7229,10 @@ async def submit_oauth_code(
     if provider_id == "anthropic":
         return await asyncio.get_running_loop().run_in_executor(
             None, _submit_anthropic_pkce, body.session_id, body.code, profile,
+        )
+    if provider_id == "xai-oauth":
+        return await asyncio.get_running_loop().run_in_executor(
+            None, _submit_xai_loopback_paste, body.session_id, body.code, profile,
         )
     raise HTTPException(status_code=400, detail=f"submit not supported for {provider_id}")
 
