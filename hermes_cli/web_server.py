@@ -350,6 +350,13 @@ def _require_token(request: Request) -> None:
         # authenticated. Belt-and-braces: confirm the session is present.
         if getattr(request.state, "session", None) is not None:
             return
+        # Headless control planes (Verxio API proxying into an isolated runtime
+        # container) pass the injected HERMES_DASHBOARD_SESSION_TOKEN via
+        # X-Hermes-Session-Token / Bearer. gated_auth_middleware lets those
+        # through without attaching request.state.session — honor the same
+        # token here so OAuth start/disconnect/env-reveal work behind the gate.
+        if os.environ.get("HERMES_DASHBOARD_SESSION_TOKEN") and _has_valid_session_token(request):
+            return
         raise HTTPException(status_code=401, detail="Unauthorized")
     if not _has_valid_session_token(request):
         raise HTTPException(status_code=401, detail="Unauthorized")
