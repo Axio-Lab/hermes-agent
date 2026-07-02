@@ -349,6 +349,21 @@ def _resolve_skill_dir(name: str, category: str = None) -> Path:
     return SKILLS_DIR / name
 
 
+def _skill_md_matches_name(skill_md: Path, name: str) -> bool:
+    """Return True if *name* matches the skill directory or frontmatter name."""
+    if skill_md.parent.name == name:
+        return True
+    try:
+        from agent.skill_utils import parse_frontmatter
+
+        raw = skill_md.read_text(encoding="utf-8")
+        frontmatter, _ = parse_frontmatter(raw)
+        fm_name = frontmatter.get("name")
+        return bool(fm_name and str(fm_name) == name)
+    except Exception:
+        return False
+
+
 def _find_skill(name: str) -> Optional[Dict[str, Any]]:
     """
     Find a skill by name across all skill directories.
@@ -356,6 +371,9 @@ def _find_skill(name: str) -> Optional[Dict[str, Any]]:
     Searches the local skills dir (~/.hermes/skills/) first, then any
     external dirs configured via skills.external_dirs.  Returns
     {"path": Path} or None.
+
+    Matches both the skill directory name and the frontmatter ``name``
+    field (the canonical id used by skills_list and the dashboard).
     """
     from agent.skill_utils import get_all_skills_dirs, is_excluded_skill_path
     for skills_dir in get_all_skills_dirs():
@@ -364,7 +382,7 @@ def _find_skill(name: str) -> Optional[Dict[str, Any]]:
         for skill_md in skills_dir.rglob("SKILL.md"):
             if is_excluded_skill_path(skill_md):
                 continue
-            if skill_md.parent.name == name:
+            if _skill_md_matches_name(skill_md, name):
                 return {"path": skill_md.parent}
     return None
 
@@ -427,7 +445,7 @@ def _find_skill_in_other_profiles(name: str) -> List[Tuple[str, Path]]:
             for skill_md in skills_dir.rglob("SKILL.md"):
                 if is_excluded_skill_path(skill_md):
                     continue
-                if skill_md.parent.name == name:
+                if _skill_md_matches_name(skill_md, name):
                     matches.append((profile_name, skill_md.parent))
                     break  # one match per profile is enough
         except OSError:

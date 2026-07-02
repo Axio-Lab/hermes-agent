@@ -18,6 +18,7 @@ from tools.skill_manager_tool import (
     _delete_skill,
     _write_file,
     _remove_file,
+    _find_skill,
     skill_manage,
     MAX_NAME_LENGTH,
 )
@@ -1028,3 +1029,25 @@ class TestDeleteSkillRmtreeGuard:
         assert result["success"] is False
         assert "skills root" in result["error"].lower()
         assert outside.exists()
+
+
+class TestFindSkill:
+    def test_finds_by_frontmatter_name_when_folder_differs(self, tmp_path):
+        skill_dir = tmp_path / "research" / "folder-name"
+        skill_dir.mkdir(parents=True)
+        skill_dir.joinpath("SKILL.md").write_text(
+            "---\nname: canonical-name\ndescription: test\n---\n\n# Skill\n"
+        )
+        with _skill_dir(tmp_path):
+            found = _find_skill("canonical-name")
+        assert found is not None
+        assert found["path"] == skill_dir
+
+    def test_finds_by_folder_name(self, tmp_path):
+        skill_dir = tmp_path / "my-skill"
+        skill_dir.mkdir()
+        skill_dir.joinpath("SKILL.md").write_text(VALID_SKILL_CONTENT)
+        with _skill_dir(tmp_path):
+            found = _find_skill("test-skill")
+        assert found is not None
+        assert found["path"] == skill_dir
