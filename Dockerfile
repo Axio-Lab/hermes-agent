@@ -191,6 +191,10 @@ RUN cd web && npm run build && \
 # .dockerignore excludes node_modules, so the installs above survive.
 COPY . .
 
+# Pre-install WhatsApp bridge deps so dashboard QR pairing is instant in
+# container runtimes (avoids a multi-minute npm install on first pairing).
+RUN cd scripts/whatsapp-bridge && npm install --no-fund --no-audit --progress=false
+
 # ---------- Permissions ----------
 # Link hermes-agent itself (editable). Deps are already installed in the
 # cached layer above; `--no-deps` makes this a fast egg-link creation with no

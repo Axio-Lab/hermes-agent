@@ -5003,6 +5003,9 @@ def _messaging_platform_payload(
             )
             home_channel = None
 
+    if platform_id == "whatsapp":
+        configured = _whatsapp_is_paired()
+
     state = (
         runtime_platform.get("state") if isinstance(runtime_platform, dict) else None
     )
@@ -5060,6 +5063,320 @@ def _messaging_platform_payload(
 
 def _write_platform_enabled(platform_id: str, enabled: bool) -> None:
     write_platform_config_field(platform_id, "enabled", enabled)
+
+
+def _whatsapp_session_dir() -> Path:
+    from hermes_constants import get_hermes_dir
+
+    session_dir = get_hermes_dir("platforms/whatsapp/session", "whatsapp/session")
+    session_dir.mkdir(parents=True, exist_ok=True)
+    return session_dir
+
+
+def _whatsapp_is_paired() -> bool:
+    return (_whatsapp_session_dir() / "creds.json").is_file()
+
+
+_WHATSAPP_PAIRING_TTL_SECONDS = 600
+
+
+@dataclass
+class _WhatsAppPairingSession:
+    process: subprocess.Popen[Any]
+    http_port: int
+    started_at: float
+    session_dir: Path
+
+
+_whatsapp_pairings: dict[str, _WhatsAppPairingSession] = {}
+_whatsapp_pairing_lock = threading.RLock()
+
+
+def _prune_whatsapp_pairings() -> None:
+    now = time.time()
+    expired = [
+        pairing_id
+        for pairing_id, record in _whatsapp_pairings.items()
+        if now - record.started_at > _WHATSAPP_PAIRING_TTL_SECONDS
+    ]
+    for pairing_id in expired:
+        _stop_whatsapp_pairing(pairing_id)
+
+
+def _stop_whatsapp_pairing(pairing_id: str) -> None:
+    record = _whatsapp_pairings.pop(pairing_id, None)
+    if not record:
+        return
+    proc = record.process
+    if proc.poll() is None:
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+
+def _pick_local_port() -> int:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _ensure_whatsapp_bridge_deps(bridge_dir: Path) -> None:
+    if (bridge_dir / "node_modules").exists():
+        return
+    from hermes_constants import find_node_executable, with_hermes_node_path
+
+    npm = find_node_executable("npm")
+    if not npm:
+        raise HTTPException(
+            status_code=503,
+            detail="npm not found — install Node.js before pairing WhatsApp.",
+        )
+    result = subprocess.run(
+        [npm, "install", "--no-fund", "--no-audit", "--progress=false"],
+        cwd=str(bridge_dir),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=with_hermes_node_path(),
+        timeout=300,
+        check=False,
+    )
+    if result.returncode != 0:
+        err = (result.stderr or "").strip()
+        preview = "\n".join(err.splitlines()[-8:]) if err else "(no output)"
+        raise HTTPException(
+            status_code=500,
+            detail=f"WhatsApp bridge dependency install failed: {preview}",
+        )
+
+
+def _whatsapp_bridge_dir_for_pairing() -> Path:
+    """Prefer the install-tree bridge when deps are baked in (Docker).
+
+    ``resolve_whatsapp_bridge_dir()`` mirrors into HERMES_HOME on read-only
+    installs, but that copy can go stale after image upgrades. Pairing only
+    needs to *run* bridge.js — npm install already happened at build time.
+    """
+    from gateway.platforms.whatsapp_common import resolve_whatsapp_bridge_dir
+
+    install_bridge = PROJECT_ROOT / "scripts" / "whatsapp-bridge"
+    if (install_bridge / "bridge.js").is_file() and (install_bridge / "node_modules").is_dir():
+        return install_bridge
+    return resolve_whatsapp_bridge_dir()
+
+
+def _spawn_whatsapp_pairing_process(http_port: int, session_dir: Path) -> subprocess.Popen[Any]:
+    from hermes_constants import find_node_executable, with_hermes_node_path
+
+    bridge_dir = _whatsapp_bridge_dir_for_pairing()
+    bridge_script = bridge_dir / "bridge.js"
+    if not bridge_script.exists():
+        raise HTTPException(status_code=500, detail=f"WhatsApp bridge script not found at {bridge_script}")
+
+    _ensure_whatsapp_bridge_deps(bridge_dir)
+    node = find_node_executable("node") or "node"
+    return subprocess.Popen(
+        [
+            node,
+            str(bridge_script),
+            "--pair-only",
+            "--pair-http-port",
+            str(http_port),
+            "--session",
+            str(session_dir),
+        ],
+        cwd=str(bridge_dir),
+        env=with_hermes_node_path(),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def _fetch_whatsapp_pairing_status(record: _WhatsAppPairingSession) -> dict[str, Any]:
+    url = f"http://127.0.0.1:{record.http_port}/pairing/status"
+    try:
+        with urllib.request.urlopen(url, timeout=3) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            if isinstance(payload, dict):
+                return payload
+    except Exception:
+        pass
+    paired = (record.session_dir / "creds.json").is_file()
+    proc_dead = record.process.poll() is not None
+    if paired:
+        return {"status": "connected", "qr": None, "paired": True}
+    if proc_dead:
+        return {"status": "failed", "qr": None, "paired": False}
+    return {"status": "starting", "qr": None, "paired": False}
+
+
+def _restart_gateway_after_whatsapp_pairing(profile: Optional[str] = None) -> dict[str, Any]:
+    try:
+        proc, reused = _spawn_gateway_restart(profile)
+    except Exception as exc:
+        _log.exception("Failed to auto-restart gateway after WhatsApp pairing")
+        return {
+            "restart_started": False,
+            "restart_error": str(exc),
+            "restart_action": "gateway-restart",
+        }
+    if reused:
+        _log.info(
+            "WhatsApp pairing: reusing in-flight gateway restart (pid %s)",
+            proc.pid,
+        )
+    return {
+        "restart_started": True,
+        "restart_action": "gateway-restart",
+    }
+
+
+class WhatsAppPairingApply(BaseModel):
+    allowed_users: Optional[str] = None
+    profile: Optional[str] = None
+
+
+class WhatsAppPairingStart(BaseModel):
+    reset: bool = False
+
+
+@app.post("/api/messaging/whatsapp/pairing/start")
+async def start_whatsapp_pairing(
+    body: WhatsAppPairingStart = WhatsAppPairingStart(),
+    profile: Optional[str] = None,
+):
+    with _profile_scope(profile):
+        session_dir = _whatsapp_session_dir()
+        if _whatsapp_is_paired() and not body.reset:
+            return {
+                "pairing_id": None,
+                "status": "already_paired",
+                "paired": True,
+            }
+
+        if body.reset and _whatsapp_is_paired():
+            shutil.rmtree(session_dir, ignore_errors=True)
+            session_dir.mkdir(parents=True, exist_ok=True)
+
+        with _whatsapp_pairing_lock:
+            _prune_whatsapp_pairings()
+            for existing_id, record in list(_whatsapp_pairings.items()):
+                if record.process.poll() is None:
+                    status = _fetch_whatsapp_pairing_status(record)
+                    return {
+                        "pairing_id": existing_id,
+                        "status": status.get("status") or "starting",
+                        "qr": status.get("qr"),
+                        "paired": bool(status.get("paired")),
+                    }
+                _stop_whatsapp_pairing(existing_id)
+
+            http_port = _pick_local_port()
+            process = await asyncio.to_thread(
+                _spawn_whatsapp_pairing_process, http_port, session_dir
+            )
+            pairing_id = secrets.token_urlsafe(16)
+            _whatsapp_pairings[pairing_id] = _WhatsAppPairingSession(
+                process=process,
+                http_port=http_port,
+                started_at=time.time(),
+                session_dir=session_dir,
+            )
+
+        await asyncio.sleep(0.8)
+        with _whatsapp_pairing_lock:
+            record = _whatsapp_pairings.get(pairing_id)
+            status = _fetch_whatsapp_pairing_status(record) if record else {}
+        return {
+            "pairing_id": pairing_id,
+            "status": status.get("status") or "starting",
+            "qr": status.get("qr"),
+            "paired": bool(status.get("paired")),
+        }
+
+
+@app.get("/api/messaging/whatsapp/pairing/{pairing_id}")
+async def get_whatsapp_pairing_status(pairing_id: str, profile: Optional[str] = None):
+    with _profile_scope(profile):
+        with _whatsapp_pairing_lock:
+            _prune_whatsapp_pairings()
+            record = _whatsapp_pairings.get(pairing_id)
+            if not record:
+                raise HTTPException(status_code=404, detail="WhatsApp pairing session not found or expired.")
+            status = _fetch_whatsapp_pairing_status(record)
+
+        if status.get("paired") or status.get("status") == "connected":
+            return {
+                "pairing_id": pairing_id,
+                "status": "connected",
+                "qr": None,
+                "paired": True,
+            }
+
+        if record.process.poll() is not None and not status.get("paired"):
+            _stop_whatsapp_pairing(pairing_id)
+            raise HTTPException(status_code=410, detail="WhatsApp pairing failed. Start a new QR session.")
+
+        return {
+            "pairing_id": pairing_id,
+            "status": status.get("status") or "starting",
+            "qr": status.get("qr"),
+            "paired": bool(status.get("paired")),
+        }
+
+
+@app.post("/api/messaging/whatsapp/pairing/{pairing_id}/apply")
+async def apply_whatsapp_pairing(
+    pairing_id: str,
+    body: WhatsAppPairingApply,
+    profile: Optional[str] = None,
+):
+    effective_profile = body.profile or profile
+    with _profile_scope(effective_profile):
+        with _whatsapp_pairing_lock:
+            record = _whatsapp_pairings.get(pairing_id)
+            if not record:
+                if not _whatsapp_is_paired():
+                    raise HTTPException(status_code=404, detail="WhatsApp pairing session not found.")
+            else:
+                status = _fetch_whatsapp_pairing_status(record)
+                if not status.get("paired") and status.get("status") != "connected":
+                    raise HTTPException(status_code=409, detail="WhatsApp is not paired yet. Scan the QR code first.")
+                _stop_whatsapp_pairing(pairing_id)
+
+        try:
+            if body.allowed_users and body.allowed_users.strip():
+                save_env_value("WHATSAPP_ALLOWED_USERS", body.allowed_users.strip().replace(" ", ""))
+            save_env_value("WHATSAPP_ENABLED", "true")
+            _write_platform_enabled("whatsapp", True)
+        except Exception:
+            _log.exception("WhatsApp pairing apply failed")
+            raise HTTPException(status_code=500, detail="Failed to save WhatsApp configuration.")
+
+    restart_result = _restart_gateway_after_whatsapp_pairing(effective_profile)
+    return {
+        "ok": True,
+        "platform": "whatsapp",
+        "paired": True,
+        "needs_restart": not restart_result.get("restart_started"),
+        **restart_result,
+    }
+
+
+@app.delete("/api/messaging/whatsapp/pairing/{pairing_id}")
+async def cancel_whatsapp_pairing(pairing_id: str):
+    with _whatsapp_pairing_lock:
+        _stop_whatsapp_pairing(pairing_id)
+    return {"ok": True}
 
 
 _TELEGRAM_ONBOARDING_DEFAULT_URL = "https://setup.hermes-agent.nousresearch.com"

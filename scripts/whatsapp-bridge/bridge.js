@@ -69,6 +69,7 @@ try {
     .slice(0, 16);
 } catch {}
 const PAIR_ONLY = args.includes('--pair-only');
+const PAIR_HTTP_PORT = parseInt(getArg('pair-http-port', '0'), 10);
 const WHATSAPP_MODE = getArg('mode', process.env.WHATSAPP_MODE || 'self-chat'); // "bot" or "self-chat"
 const ALLOWED_USERS = parseAllowedUsers(process.env.WHATSAPP_ALLOWED_USERS || '');
 const DEFAULT_REPLY_PREFIX = '⚕ *Hermes Agent*\n────────────\n';
@@ -196,6 +197,8 @@ const MAX_RECENT_IDS = 50;
 
 let sock = null;
 let connectionState = 'disconnected';
+let latestPairingQr = null;
+let pairingStatus = PAIR_ONLY ? 'starting' : 'disconnected';
 
 async function startSocket() {
   const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
@@ -224,6 +227,8 @@ async function startSocket() {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
+      latestPairingQr = qr;
+      pairingStatus = 'waiting_qr';
       console.log('\n📱 Scan this QR code with WhatsApp on your phone:\n');
       qrcode.generate(qr, { small: true });
       console.log('\nWaiting for scan...\n');
@@ -232,6 +237,9 @@ async function startSocket() {
     if (connection === 'close') {
       const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
       connectionState = 'disconnected';
+      if (pairingStatus !== 'connected') {
+        pairingStatus = 'disconnected';
+      }
 
       if (reason === DisconnectReason.loggedOut) {
         console.log('❌ Logged out. Delete session and restart to re-authenticate.');
@@ -247,6 +255,7 @@ async function startSocket() {
       }
     } else if (connection === 'open') {
       connectionState = 'connected';
+      pairingStatus = 'connected';
       console.log('✅ WhatsApp connected!');
       if (PAIR_ONLY) {
         console.log('✅ Pairing complete. Credentials saved.');
@@ -725,11 +734,29 @@ app.get('/health', (req, res) => {
 });
 
 // Start
+function startPairHttpServer() {
+  const pairApp = express();
+  pairApp.get('/pairing/status', (_req, res) => {
+    const paired = existsSync(path.join(SESSION_DIR, 'creds.json'));
+    res.json({
+      status: paired ? 'connected' : pairingStatus,
+      qr: latestPairingQr,
+      paired,
+    });
+  });
+  pairApp.listen(PAIR_HTTP_PORT, '127.0.0.1', () => {
+    console.log(`🔐 WhatsApp pairing status on http://127.0.0.1:${PAIR_HTTP_PORT}/pairing/status`);
+  });
+}
+
 if (PAIR_ONLY) {
-  // Pair-only mode: just connect, show QR, save creds, exit. No HTTP server.
+  // Pair-only mode: connect, expose QR over HTTP when requested, save creds, exit.
   console.log('📱 WhatsApp pairing mode');
   console.log(`📁 Session: ${SESSION_DIR}`);
   console.log();
+  if (PAIR_HTTP_PORT > 0) {
+    startPairHttpServer();
+  }
   startSocket();
 } else {
   app.listen(PORT, '127.0.0.1', () => {
