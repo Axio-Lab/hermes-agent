@@ -311,6 +311,36 @@ def _redact_approval_command(cmd: "str | None") -> str:
     return redact_sensitive_text(str(cmd or ""), force=True)
 
 
+def _verxio_hosted() -> bool:
+    return os.getenv("VERXIO_HOSTED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+_VERXIO_NOISY_STATUS_RE = re.compile(
+    r"("
+    r"non-retryable\s+error"
+    r"|\bhttp\s*\d{3}\b"
+    r"|trying\s+fallback"
+    r"|switching\s+to\s+fallback"
+    r"|provider\s+safety\s+filter"
+    r"|empty/malformed\s+response"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _verxio_messaging_platform(platform: Any) -> bool:
+    return _gateway_platform_value(platform) in {
+        "whatsapp",
+        "telegram",
+        "discord",
+        "slack",
+        "signal",
+        "sms",
+        "mattermost",
+        "matrix",
+    }
+
+
 def _gateway_provider_error_reply(text: str) -> str:
     """Map raw provider/API errors to a short user-safe Telegram reply."""
     if _GATEWAY_AUTH_ERROR_RE.search(text):
@@ -369,19 +399,46 @@ def _looks_like_gateway_provider_error(text: str) -> bool:
     return bool(_GATEWAY_PROVIDER_ERROR_SHAPE_RE.search(body))
 
 
+def _verxio_provider_error_reply(text: str) -> str:
+    """Plain-language provider errors for Verxio messaging surfaces."""
+    redacted = _redact_gateway_user_facing_secrets(str(text))
+    lower = redacted.lower()
+    if (
+        _GATEWAY_AUTH_ERROR_RE.search(redacted)
+        or "403" in redacted
+        or "quota" in lower
+        or "billing" in lower
+    ):
+        return (
+            "I couldn't get a response from the model provider. "
+            "Your API quota may be exhausted, so check billing or switch models in Verxio settings."
+        )
+    if _GATEWAY_RATE_LIMIT_RE.search(redacted):
+        return "The model provider is rate-limiting requests. Give it a minute and try again."
+    if _looks_like_gateway_provider_error(redacted):
+        return "Something went wrong reaching the model provider. Try again in a moment."
+    return redacted
+
+
 def _sanitize_gateway_final_response(platform: Any, text: str) -> str:
     """Sanitize final gateway replies before sending them to high-noise chats.
 
     Telegram is Bob's mobile inbox, so it should receive concise, safe provider
     failure categories instead of raw HTTP bodies, request IDs, or policy text.
-    Other platforms keep the existing behaviour for now.
+    Verxio-hosted messaging surfaces get the same treatment without emoji noise.
     """
     if not text:
         return text
+
+    redacted = _redact_gateway_user_facing_secrets(str(text))
+    if _verxio_hosted() and _verxio_messaging_platform(platform):
+        if _looks_like_gateway_provider_error(redacted):
+            return _verxio_provider_error_reply(redacted)
+        return redacted
+
     if _gateway_platform_value(platform) != "telegram":
         return text
 
-    redacted = _redact_gateway_user_facing_secrets(str(text))
     if _looks_like_gateway_provider_error(redacted):
         return _gateway_provider_error_reply(redacted)
     return redacted
@@ -392,6 +449,17 @@ def _prepare_gateway_status_message(platform: Any, event_type: str, message: str
     text = str(message or "").strip()
     if not text:
         return None
+
+    if _verxio_hosted() and _verxio_messaging_platform(platform):
+        text = _redact_gateway_user_facing_secrets(text)
+        if (
+            _TELEGRAM_NOISY_STATUS_RE.search(text)
+            or _VERXIO_NOISY_STATUS_RE.search(text)
+            or _looks_like_gateway_provider_error(text)
+        ):
+            return None
+        return text
+
     if _gateway_platform_value(platform) != "telegram":
         return text
 
@@ -2342,6 +2410,18 @@ def _normalize_empty_agent_response(
             p in error_str
             for p in ("context", "token", "too large", "too long", "exceed", "payload")
         ) or ("400" in error_str and history_len > 50)
+        if _verxio_hosted():
+            if is_context_failure:
+                return (
+                    "This conversation got too long for the model. "
+                    "Use /compact to shorten it, or /reset to start fresh."
+                )
+            if _looks_like_gateway_provider_error(str(error_detail)):
+                return _verxio_provider_error_reply(str(error_detail))
+            return (
+                f"I couldn't finish that request: {str(error_detail)[:200]}. "
+                "Try again or use /reset to start fresh."
+            )
         if is_context_failure:
             return (
                 "⚠️ Session too large for the model's context window.\n"
@@ -2357,7 +2437,14 @@ def _normalize_empty_agent_response(
     if api_calls > 0 and not agent_result.get("interrupted"):
         if agent_result.get("partial"):
             err = agent_result.get("error", "processing incomplete")
+            if _verxio_hosted():
+                return f"I stopped partway through that: {str(err)[:200]}. Try again."
             return f"⚠️ Processing stopped: {str(err)[:200]}. Try again."
+        if _verxio_hosted():
+            return (
+                "I processed your message but didn't have a reply ready. "
+                "Try sending it again."
+            )
         return (
             "⚠️ Processing completed but no response was generated. "
             "This may be a transient error — try sending your message again."
