@@ -4459,7 +4459,21 @@ _PLATFORM_OVERRIDES: dict[str, dict[str, Any]] = {
         "name": "WhatsApp",
         "description": "Use Verxio through the bundled WhatsApp bridge with QR-based auth.",
         "docs_url": "https://github.com/tulir/whatsmeow",
-        "env_vars": ("WHATSAPP_ENABLED", "WHATSAPP_MODE", "WHATSAPP_ALLOWED_USERS"),
+        "env_vars": (
+            "WHATSAPP_MODE",
+            "WHATSAPP_ALLOWED_USERS",
+            "WHATSAPP_ALLOW_ALL_USERS",
+            "WHATSAPP_DM_POLICY",
+            "WHATSAPP_HOME_CHANNEL",
+            "WHATSAPP_HOME_CHANNEL_NAME",
+            "WHATSAPP_GROUP_POLICY",
+            "WHATSAPP_GROUP_ALLOWED_USERS",
+            "WHATSAPP_REQUIRE_MENTION",
+            "WHATSAPP_MENTION_PATTERNS",
+            "WHATSAPP_FREE_RESPONSE_CHATS",
+            "WHATSAPP_DEBUG",
+            "WHATSAPP_ENABLED",
+        ),
         "required_env": (),
     },
     "homeassistant": {
@@ -4637,13 +4651,55 @@ _MESSAGING_ENV_FALLBACKS: dict[str, dict[str, Any]] = {
         "advanced": True,
     },
     "WHATSAPP_MODE": {
-        "description": "WhatsApp bridge mode",
-        "prompt": "WhatsApp mode",
-        "advanced": True,
+        "description": "self-chat (Message yourself) or bot (allowlisted senders on a bot number)",
+        "prompt": "Bridge mode",
     },
     "WHATSAPP_ALLOWED_USERS": {
-        "description": "Comma-separated WhatsApp users allowed to use the bot",
-        "prompt": "Allowed WhatsApp users",
+        "description": "Comma-separated phone numbers (country code, no +) or * to allow everyone",
+        "prompt": "Allowed phone numbers",
+    },
+    "WHATSAPP_ALLOW_ALL_USERS": {
+        "description": "Allow any WhatsApp sender without an allowlist (development only)",
+        "prompt": "Allow all users",
+    },
+    "WHATSAPP_DM_POLICY": {
+        "description": "How direct messages are gated: open, allowlist, or disabled",
+        "prompt": "DM policy",
+    },
+    "WHATSAPP_HOME_CHANNEL": {
+        "description": "Default chat for cron jobs and notifications (DM phone/LID or group JID ending in @g.us)",
+        "prompt": "Home chat ID",
+    },
+    "WHATSAPP_HOME_CHANNEL_NAME": {
+        "description": "Display name for the home chat in logs and status output",
+        "prompt": "Home chat name",
+    },
+    "WHATSAPP_GROUP_POLICY": {
+        "description": "How group messages are gated: open, allowlist, or disabled",
+        "prompt": "Group policy",
+    },
+    "WHATSAPP_GROUP_ALLOWED_USERS": {
+        "description": "Comma-separated group chat IDs when group policy is allowlist (e.g. 120363001234567890@g.us)",
+        "prompt": "Allowed group IDs",
+    },
+    "WHATSAPP_REQUIRE_MENTION": {
+        "description": "Only respond in groups when @mentioned or a mention pattern matches",
+        "prompt": "Require mention in groups",
+    },
+    "WHATSAPP_MENTION_PATTERNS": {
+        "description": 'JSON array of regex patterns that count as a mention (e.g. ["@bot", "^hey"])',
+        "prompt": "Mention patterns",
+        "advanced": True,
+    },
+    "WHATSAPP_FREE_RESPONSE_CHATS": {
+        "description": "Comma-separated group chat IDs that never require a mention",
+        "prompt": "Free-response group IDs",
+        "advanced": True,
+    },
+    "WHATSAPP_DEBUG": {
+        "description": "Log raw WhatsApp message events in bridge.log for troubleshooting",
+        "prompt": "Debug logging",
+        "advanced": True,
     },
     "HASS_URL": {
         "description": "Home Assistant base URL, e.g. https://homeassistant.local:8123",
@@ -4960,15 +5016,17 @@ def _messaging_platform_payload(
         # (loaded at startup) and would falsely report the root credentials
         # as the profile's.
         value = env_on_disk.get(key) or ("" if scoped else os.getenv(key, ""))
-        env_vars.append(
-            {
-                "key": key,
-                "required": key in entry["required_env"],
-                "is_set": bool(value),
-                "redacted_value": redact_key(value) if value else None,
-                **_messaging_env_info(key),
-            }
-        )
+        info = _messaging_env_info(key)
+        field_payload: dict[str, Any] = {
+            "key": key,
+            "required": key in entry["required_env"],
+            "is_set": bool(value),
+            "redacted_value": redact_key(value) if value else None,
+            **info,
+        }
+        if not info.get("is_password"):
+            field_payload["current_value"] = value or None
+        env_vars.append(field_payload)
 
     if scoped:
         # Profile-scoped view: derive enablement/configuration from the
