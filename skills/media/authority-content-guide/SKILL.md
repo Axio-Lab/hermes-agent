@@ -1,6 +1,6 @@
 ---
 name: authority-content-guide
-description: "What: Brand authority content system with voice, hooks, and a 7-day plan. Who: Founders, creators, and marketers growing trust and leads on social. Outcome: On-brand posts, captions, and content mapped to sales."
+description: "Turn your expertise into on-brand content that builds authority and trust, grows your audience, attracts leads and converts into sales."
 ---
 
 # Authority Content Guide Skill

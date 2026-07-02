@@ -1,6 +1,6 @@
 ---
-name: finding-first-customer
-description: "What: Zero-to-one product discovery from real customer workarounds. Who: Founders choosing what to build or finding a first paying customer. Outcome: Validate urgency and charge before you build."
+name: finding-your-first-customer
+description: "Discover urgent product ideas from real customer workarounds, identify what to build by finding urgent customer problems and validate demand with paying customers before you build."
 ---
 
 # Finding First Customer
