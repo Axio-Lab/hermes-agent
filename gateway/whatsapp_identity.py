@@ -33,7 +33,10 @@ from __future__ import annotations
 import json
 import logging
 import re
+from pathlib import Path
 from typing import Set
+
+from hermes_constants import get_hermes_dir
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +45,10 @@ logger = logging.getLogger(__name__)
 # full-width digits / Unicode word chars can't sneak through.
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9@.+\-]+$")
 
-from hermes_constants import get_hermes_home
+
+def _whatsapp_session_dir() -> Path:
+    """Return the Baileys session directory (matches the WhatsApp adapter)."""
+    return Path(get_hermes_dir("platforms/whatsapp/session", "whatsapp/session"))
 
 
 def normalize_whatsapp_identifier(value: str) -> str:
@@ -133,7 +139,7 @@ def expand_whatsapp_aliases(identifier: str) -> Set[str]:
     if not normalized:
         return set()
 
-    session_dir = get_hermes_home() / "whatsapp" / "session"
+    session_dir = _whatsapp_session_dir()
     resolved: Set[str] = set()
     queue = [normalized]
 

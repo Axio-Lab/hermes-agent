@@ -72,7 +72,9 @@ const PAIR_ONLY = args.includes('--pair-only');
 const PAIR_HTTP_PORT = parseInt(getArg('pair-http-port', '0'), 10);
 const WHATSAPP_MODE = getArg('mode', process.env.WHATSAPP_MODE || 'self-chat'); // "bot" or "self-chat"
 const ALLOWED_USERS = parseAllowedUsers(process.env.WHATSAPP_ALLOWED_USERS || '');
-const DEFAULT_REPLY_PREFIX = '⚕ *Hermes Agent*\n────────────\n';
+const DEFAULT_BROWSER_NAME = 'Hermes Agent';
+const BROWSER_NAME = (process.env.WHATSAPP_BROWSER_NAME || DEFAULT_BROWSER_NAME).trim() || DEFAULT_BROWSER_NAME;
+const DEFAULT_REPLY_PREFIX = `⚕ *${BROWSER_NAME}*\n────────────\n`;
 const REPLY_PREFIX = process.env.WHATSAPP_REPLY_PREFIX === undefined
   ? DEFAULT_REPLY_PREFIX
   : process.env.WHATSAPP_REPLY_PREFIX.replace(/\\n/g, '\n');
@@ -209,7 +211,7 @@ async function startSocket() {
     auth: state,
     logger,
     printQRInTerminal: false,
-    browser: ['Hermes Agent', 'Chrome', '120.0'],
+    browser: [BROWSER_NAME, 'Chrome', '120.0'],
     syncFullHistory: false,
     markOnlineOnConnect: false,
     // Required for Baileys 7.x: without this, incoming messages that need

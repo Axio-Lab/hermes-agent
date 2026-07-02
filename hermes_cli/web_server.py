@@ -4406,14 +4406,14 @@ async def reveal_env_var(
 _PLATFORM_OVERRIDES: dict[str, dict[str, Any]] = {
     "telegram": {
         "name": "Telegram",
-        "description": "Run Hermes from Telegram DMs, groups, and topics.",
+        "description": "Run Verxio from Telegram DMs, groups, and topics.",
         "docs_url": "https://core.telegram.org/bots/features#botfather",
         "env_vars": ("TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_USERS", "TELEGRAM_PROXY"),
         "required_env": ("TELEGRAM_BOT_TOKEN",),
     },
     "discord": {
         "name": "Discord",
-        "description": "Connect Hermes to Discord DMs, channels, and threads.",
+        "description": "Connect Verxio to Discord DMs, channels, and threads.",
         "docs_url": "https://discord.com/developers/applications",
         "env_vars": (
             "DISCORD_BOT_TOKEN",
@@ -4457,7 +4457,7 @@ _PLATFORM_OVERRIDES: dict[str, dict[str, Any]] = {
     },
     "whatsapp": {
         "name": "WhatsApp",
-        "description": "Use Hermes through the bundled WhatsApp bridge with QR-based auth.",
+        "description": "Use Verxio through the bundled WhatsApp bridge with QR-based auth.",
         "docs_url": "https://github.com/tulir/whatsmeow",
         "env_vars": ("WHATSAPP_ENABLED", "WHATSAPP_MODE", "WHATSAPP_ALLOWED_USERS"),
         "required_env": (),
@@ -4927,6 +4927,15 @@ def _gateway_platform_config(platform_id: str):
     return config, platform, platform_config
 
 
+def _verxio_hosted() -> bool:
+    return os.getenv("VERXIO_HOSTED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _whatsapp_platform_description() -> str:
+    product = "Verxio" if _verxio_hosted() else "Hermes"
+    return f"Use {product} through the bundled WhatsApp bridge with QR-based auth."
+
+
 def _messaging_platform_payload(
     entry: dict[str, Any],
     env_on_disk: dict[str, str],
@@ -5039,6 +5048,20 @@ def _messaging_platform_payload(
     if state == "startup_failed":
         error_code = error_code or "startup_failed"
         error_message = error_message or runtime_gateway_error
+
+    if platform_id == "whatsapp" and not configured:
+        if error_code == "whatsapp_not_paired":
+            error_code = None
+            error_message = None
+        if enabled:
+            try:
+                _write_platform_enabled("whatsapp", False)
+                remove_env_value("WHATSAPP_ENABLED")
+                enabled = False
+                if state not in (None, "disabled", "not_configured"):
+                    state = "not_configured"
+            except Exception:
+                _log.debug("Could not reset unpaired WhatsApp enablement", exc_info=True)
 
     return {
         "id": platform_id,
@@ -5267,6 +5290,9 @@ async def start_whatsapp_pairing(
             shutil.rmtree(session_dir, ignore_errors=True)
             session_dir.mkdir(parents=True, exist_ok=True)
 
+        _write_platform_enabled("whatsapp", False)
+        remove_env_value("WHATSAPP_ENABLED")
+
         with _whatsapp_pairing_lock:
             _prune_whatsapp_pairings()
             for existing_id, record in list(_whatsapp_pairings.items()):
@@ -5377,6 +5403,30 @@ async def cancel_whatsapp_pairing(pairing_id: str):
     with _whatsapp_pairing_lock:
         _stop_whatsapp_pairing(pairing_id)
     return {"ok": True}
+
+
+@app.delete("/api/messaging/whatsapp/disconnect")
+async def disconnect_whatsapp(profile: Optional[str] = None):
+    """Remove WhatsApp session credentials and disable the platform."""
+    effective_profile = profile
+    with _profile_scope(effective_profile):
+        session_dir = _whatsapp_session_dir()
+        with _whatsapp_pairing_lock:
+            for pairing_id in list(_whatsapp_pairings):
+                _stop_whatsapp_pairing(pairing_id)
+        if session_dir.exists():
+            shutil.rmtree(session_dir, ignore_errors=True)
+        remove_env_value("WHATSAPP_ENABLED")
+        remove_env_value("WHATSAPP_ALLOWED_USERS")
+        _write_platform_enabled("whatsapp", False)
+
+    restart_result = _restart_gateway_after_whatsapp_pairing(effective_profile)
+    return {
+        "ok": True,
+        "platform": "whatsapp",
+        "disconnected": True,
+        **restart_result,
+    }
 
 
 _TELEGRAM_ONBOARDING_DEFAULT_URL = "https://setup.hermes-agent.nousresearch.com"
@@ -5802,6 +5852,15 @@ async def update_messaging_platform(
                     save_env_value(key, trimmed)
 
             if body.enabled is not None:
+                if (
+                    body.enabled
+                    and platform_id == "whatsapp"
+                    and not _whatsapp_is_paired()
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Pair WhatsApp by scanning the QR code before enabling the gateway.",
+                    )
                 _write_platform_enabled(platform_id, body.enabled)
 
         return {"ok": True, "platform": platform_id}
