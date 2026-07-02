@@ -4476,6 +4476,38 @@ _PLATFORM_OVERRIDES: dict[str, dict[str, Any]] = {
         ),
         "required_env": (),
     },
+    "whatsapp_cloud": {
+        "name": "WhatsApp Business (Cloud API)",
+        "description": (
+            "Official Meta WhatsApp Business API. Add credentials below, expose the "
+            "webhook port publicly, then point Meta at your callback URL."
+        ),
+        "docs_url": "https://hermes-agent.nousresearch.com/docs/user-guide/messaging/whatsapp-cloud",
+        "env_vars": (
+            "WHATSAPP_CLOUD_PHONE_NUMBER_ID",
+            "WHATSAPP_CLOUD_ACCESS_TOKEN",
+            "WHATSAPP_CLOUD_APP_SECRET",
+            "WHATSAPP_CLOUD_VERIFY_TOKEN",
+            "WHATSAPP_CLOUD_APP_ID",
+            "WHATSAPP_CLOUD_WABA_ID",
+            "WHATSAPP_CLOUD_WEBHOOK_HOST",
+            "WHATSAPP_CLOUD_WEBHOOK_PORT",
+            "WHATSAPP_CLOUD_WEBHOOK_PATH",
+            "WHATSAPP_CLOUD_API_VERSION",
+            "WHATSAPP_CLOUD_ALLOWED_USERS",
+            "WHATSAPP_CLOUD_ALLOW_ALL_USERS",
+            "WHATSAPP_CLOUD_DM_POLICY",
+            "WHATSAPP_CLOUD_ALLOW_FROM",
+            "WHATSAPP_CLOUD_HOME_CHANNEL",
+            "WHATSAPP_CLOUD_HOME_CHANNEL_NAME",
+            "WHATSAPP_CLOUD_GROUP_POLICY",
+            "WHATSAPP_CLOUD_GROUP_ALLOW_FROM",
+        ),
+        "required_env": (
+            "WHATSAPP_CLOUD_PHONE_NUMBER_ID",
+            "WHATSAPP_CLOUD_ACCESS_TOKEN",
+        ),
+    },
     "homeassistant": {
         "name": "Home Assistant",
         "description": "Control your smart home from Verxio via Home Assistant.",
@@ -4612,6 +4644,7 @@ _PLATFORM_ORDER: tuple[str, ...] = (
     "mattermost",
     "matrix",
     "whatsapp",
+    "whatsapp_cloud",
     "signal",
     "bluebubbles",
     "homeassistant",
@@ -4700,6 +4733,85 @@ _MESSAGING_ENV_FALLBACKS: dict[str, dict[str, Any]] = {
         "description": "Log raw WhatsApp message events in bridge.log for troubleshooting",
         "prompt": "Debug logging",
         "advanced": True,
+    },
+    "WHATSAPP_CLOUD_PHONE_NUMBER_ID": {
+        "description": "Meta Phone Number ID from API Setup (15-17 digits, not the phone number itself)",
+        "prompt": "Phone Number ID",
+    },
+    "WHATSAPP_CLOUD_ACCESS_TOKEN": {
+        "description": "Meta access token starting with EAA (System User token recommended for production)",
+        "prompt": "Access token",
+        "password": True,
+    },
+    "WHATSAPP_CLOUD_APP_SECRET": {
+        "description": "32-character hex app secret for webhook signature verification",
+        "prompt": "App secret",
+        "password": True,
+    },
+    "WHATSAPP_CLOUD_VERIFY_TOKEN": {
+        "description": "Shared secret Meta sends during webhook subscription verification",
+        "prompt": "Verify token",
+        "password": True,
+    },
+    "WHATSAPP_CLOUD_APP_ID": {
+        "description": "Optional Meta App ID (analytics)",
+        "prompt": "App ID",
+    },
+    "WHATSAPP_CLOUD_WABA_ID": {
+        "description": "Optional WhatsApp Business Account ID (analytics)",
+        "prompt": "WABA ID",
+    },
+    "WHATSAPP_CLOUD_WEBHOOK_HOST": {
+        "description": "Interface the webhook server binds to (default 0.0.0.0)",
+        "prompt": "Webhook host",
+        "advanced": True,
+    },
+    "WHATSAPP_CLOUD_WEBHOOK_PORT": {
+        "description": "Port for inbound Meta webhooks (default 8090)",
+        "prompt": "Webhook port",
+        "advanced": True,
+    },
+    "WHATSAPP_CLOUD_WEBHOOK_PATH": {
+        "description": "URL path Meta posts to (default /whatsapp/webhook)",
+        "prompt": "Webhook path",
+        "advanced": True,
+    },
+    "WHATSAPP_CLOUD_API_VERSION": {
+        "description": "Meta Graph API version (default v20.0)",
+        "prompt": "API version",
+        "advanced": True,
+    },
+    "WHATSAPP_CLOUD_ALLOWED_USERS": {
+        "description": "Comma-separated wa_ids (country code, no +) or * to allow everyone",
+        "prompt": "Allowed senders",
+    },
+    "WHATSAPP_CLOUD_ALLOW_ALL_USERS": {
+        "description": "Allow any sender without an allowlist (development only)",
+        "prompt": "Allow all senders",
+    },
+    "WHATSAPP_CLOUD_DM_POLICY": {
+        "description": "How DMs are gated: open, allowlist, or disabled",
+        "prompt": "DM policy",
+    },
+    "WHATSAPP_CLOUD_ALLOW_FROM": {
+        "description": "Comma-separated senders allowed when DM policy is allowlist",
+        "prompt": "DM allowlist",
+    },
+    "WHATSAPP_CLOUD_HOME_CHANNEL": {
+        "description": "Default wa_id for cron jobs and proactive notifications",
+        "prompt": "Home chat wa_id",
+    },
+    "WHATSAPP_CLOUD_HOME_CHANNEL_NAME": {
+        "description": "Display name for the home chat in logs and status",
+        "prompt": "Home chat name",
+    },
+    "WHATSAPP_CLOUD_GROUP_POLICY": {
+        "description": "How group messages are gated: open, allowlist, or disabled",
+        "prompt": "Group policy",
+    },
+    "WHATSAPP_CLOUD_GROUP_ALLOW_FROM": {
+        "description": "Comma-separated group chat IDs when group policy is allowlist",
+        "prompt": "Allowed group IDs",
     },
     "HASS_URL": {
         "description": "Home Assistant base URL, e.g. https://homeassistant.local:8123",
