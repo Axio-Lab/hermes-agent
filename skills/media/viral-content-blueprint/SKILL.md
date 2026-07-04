@@ -1,6 +1,6 @@
 ---
 name: viral-content-blueprint
-description: "Engineer viral content packages: hooks, structure, headlines, wow angles, and CTAs for any business using CTR, AVD, and AVP metrics."
+description: "Universal content engineering skill for any business, any industry using CTR, AVD, and AVP metrics."
 platforms: [linux, macos, windows]
 ---
 
