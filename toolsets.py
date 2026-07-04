@@ -59,6 +59,8 @@ _HERMES_CORE_TOOLS = [
     "execute_code", "delegate_task",
     # Cronjob management
     "cronjob",
+    # Reload .env / restart gateway after provider or config changes
+    "runtime_control",
     # Home Assistant smart home control (gated on HASS_TOKEN via check_fn)
     "ha_list_entities", "ha_get_state", "ha_list_services", "ha_call_service",
     # Kanban multi-agent coordination — only in schema when the agent is
@@ -184,6 +186,12 @@ TOOLSETS = {
         "description": "Cronjob management tool - create, list, update, pause, resume, remove, and trigger scheduled tasks",
         "tools": ["cronjob"],
         "includes": []
+    },
+
+    "runtime": {
+        "description": "Reload environment variables or restart the gateway after provider/model config changes",
+        "tools": ["runtime_control"],
+        "includes": [],
     },
     
 

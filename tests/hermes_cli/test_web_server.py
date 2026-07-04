@@ -1561,6 +1561,19 @@ class TestWebServerEndpoints:
         )
         assert resp.status_code == 404
 
+    def test_reload_env_vars(self):
+        """POST /api/env/reload should re-read ~/.hermes/.env."""
+        from hermes_cli.web_server import _SESSION_HEADER_NAME, _SESSION_TOKEN
+
+        resp = self.client.post(
+            "/api/env/reload",
+            headers={_SESSION_HEADER_NAME: _SESSION_TOKEN},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert "updated" in data
+
     def test_reveal_env_var_no_token(self, tmp_path):
         """POST /api/env/reveal without token should return 401."""
         from starlette.testclient import TestClient

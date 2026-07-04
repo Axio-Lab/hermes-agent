@@ -8754,6 +8754,32 @@ def _(rid, params: dict) -> dict:
         return _err(rid, 5015, str(e))
 
 
+@method("runtime.restart")
+def _(rid, params: dict) -> dict:
+    """Reload ``.env`` and restart the gateway — REST ``POST /api/runtime/restart``."""
+    try:
+        from hermes_cli.config import reload_env
+        from hermes_cli.web_server import _spawn_gateway_restart
+
+        profile = params.get("profile")
+        updated = int(reload_env())
+        proc, reused = _spawn_gateway_restart(profile)
+        return _ok(
+            rid,
+            {
+                "updated": updated,
+                "restart_started": True,
+                "restart_reused": reused,
+                "restart_pid": proc.pid,
+                "name": "gateway-restart",
+            },
+        )
+    except RuntimeError as e:
+        return _err(rid, 4090, str(e))
+    except Exception as e:
+        return _err(rid, 5015, str(e))
+
+
 _TUI_HIDDEN: frozenset[str] = frozenset(
     {
         "sethome",

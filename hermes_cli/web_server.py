@@ -4245,6 +4245,56 @@ async def set_env_var(body: EnvVarUpdate, profile: Optional[str] = None):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@app.post("/api/env/reload")
+async def reload_env_vars(profile: Optional[str] = None):
+    """Re-read ``~/.hermes/.env`` into the running gateway (classic ``/reload``)."""
+    try:
+        with _profile_scope(profile):
+            from hermes_cli.config import reload_env
+
+            updated = int(reload_env())
+        return {
+            "ok": True,
+            "updated": updated,
+            "message": (
+                f"Reloaded {updated} environment variable(s). "
+                "Start a new chat so the agent picks up provider changes."
+            ),
+        }
+    except Exception as exc:
+        _log.exception("POST /api/env/reload failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/runtime/restart")
+async def restart_agent_runtime(profile: Optional[str] = None):
+    """Reload ``.env`` then restart the gateway process to apply config changes."""
+    try:
+        with _profile_scope(profile):
+            from hermes_cli.config import reload_env
+
+            updated = int(reload_env())
+        proc, reused = _spawn_gateway_restart(profile)
+        return {
+            "ok": True,
+            "updated": updated,
+            "name": "gateway-restart",
+            "pid": proc.pid,
+            "reused": reused,
+            "message": (
+                "Reloaded credentials and started a gateway restart. "
+                "Reconnect automatically; start a new chat if the model still looks stale."
+            ),
+        }
+    except HTTPException:
+        raise
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        _log.exception("POST /api/runtime/restart failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 # Live credential probes keyed by env var. Each entry is (method, url, auth)
 # where auth is "bearer" (Authorization header) or "query" (?key=). A cheap
 # read-only models/key call that 401s on a bad token — enough to catch a
