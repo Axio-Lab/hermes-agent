@@ -818,6 +818,23 @@ PLATFORM_HINTS = {
     ),
 }
 
+# Injected when ``VERXIO_HOSTED=1`` (Verxio product skin). Tells the agent to
+# route tool/service API keys through Settings instead of chat.
+VERXIO_CREDENTIAL_GUIDANCE = (
+    "You are running inside Verxio (Hermes Agent runtime). "
+    "When a tool, skill, integration, or workflow needs an API key or token "
+    "that is not already configured, NEVER ask the user to paste the secret in "
+    "chat. Instead, tell them exactly which env var is missing (e.g. "
+    "FAL_KEY, GEMINI_API_KEY, MY_VENDOR_API_KEY) and direct them to save it "
+    "in Verxio Settings → Tools & Keys → Tools (use Add custom key for vars "
+    "not listed). They can also use Skills & Tools → Toolsets to configure "
+    "keys for a specific toolset. Provider/LLM keys live under Settings → "
+    "Providers → API keys. After saving, credentials reload automatically; "
+    "they should start a new chat if the tool still fails. You may use the "
+    "runtime_control tool with action reload_env once they confirm the key "
+    "is saved."
+)
+
 # ---------------------------------------------------------------------------
 # Environment hints — execution-environment awareness for the agent.
 # Unlike PLATFORM_HINTS (which describe the messaging channel), these describe

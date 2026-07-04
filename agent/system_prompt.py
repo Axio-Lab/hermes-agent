@@ -24,6 +24,7 @@ Pure helpers that read the agent's state.  AIAgent keeps thin forwarders.
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Dict, List, Optional
 
 from agent.prompt_builder import (
@@ -41,6 +42,7 @@ from agent.prompt_builder import (
     TASK_COMPLETION_GUIDANCE,
     TOOL_USE_ENFORCEMENT_GUIDANCE,
     TOOL_USE_ENFORCEMENT_MODELS,
+    VERXIO_CREDENTIAL_GUIDANCE,
     drain_truncation_warnings,
 )
 from agent.runtime_cwd import resolve_context_cwd
@@ -400,6 +402,9 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     _effective_hint = _resolve_platform_hint(agent, platform_key, _default_hint)
     if _effective_hint:
         stable_parts.append(_effective_hint)
+
+    if os.getenv("VERXIO_HOSTED", "").strip().lower() in {"1", "true", "yes", "on"}:
+        stable_parts.append(VERXIO_CREDENTIAL_GUIDANCE)
 
     # ── Context tier (cwd-dependent, may change between sessions) ─
     context_parts: List[str] = []

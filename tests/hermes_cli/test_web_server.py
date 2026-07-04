@@ -1367,6 +1367,24 @@ class TestWebServerEndpoints:
         # Shared GITHUB_TOKEN must NOT be hijacked into the copilot provider card.
         assert data.get("GITHUB_TOKEN", {}).get("provider", "") != "copilot"
 
+    def test_get_env_vars_surfaces_custom_tool_credentials(self, monkeypatch, tmp_path):
+        """CLI-added credential vars in .env appear under Tools & Keys."""
+        env_path = tmp_path / ".env"
+        env_path.write_text("MY_VENDOR_API_KEY=secret-vendor-key\n", encoding="utf-8")
+        monkeypatch.setattr(
+            "hermes_cli.web_server.load_env",
+            lambda: {"MY_VENDOR_API_KEY": "secret-vendor-key"},
+        )
+        data = self.client.get("/api/env").json()
+        assert "MY_VENDOR_API_KEY" in data
+        row = data["MY_VENDOR_API_KEY"]
+        assert row["is_set"] is True
+        assert row["category"] == "tool"
+        assert row["custom"] is True
+        assert row["is_password"] is True
+        assert row["redacted_value"] is not None
+        assert "secret-vendor-key" not in str(row["redacted_value"])
+
     def test_get_env_vars_bedrock_aws_vars_tagged_to_provider(self):
         """Bedrock (aws_sdk, no api-key) must still appear on the Keys tab: its
         AWS_REGION/AWS_PROFILE settings are tagged to the bedrock provider card.

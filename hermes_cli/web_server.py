@@ -4184,6 +4184,31 @@ def _catalog_provider_env_metadata() -> dict:
     return meta
 
 
+# Suffixes that identify credential-shaped env vars surfaced under Tools & Keys
+# when present in ~/.hermes/.env but absent from OPTIONAL_ENV_VARS (CLI-added
+# custom keys like MY_VENDOR_API_KEY).
+_CREDENTIAL_ENV_SUFFIXES = (
+    "_API_KEY",
+    "_TOKEN",
+    "_SECRET",
+    "_PASSWORD",
+    "_KEY",
+)
+
+
+def _looks_like_tool_credential_env(name: str) -> bool:
+    """True when *name* looks like a user-managed secret suitable for Tools & Keys."""
+    from hermes_cli.config import _ENV_VAR_NAME_RE
+
+    if not _ENV_VAR_NAME_RE.match(name):
+        return False
+    upper = name.upper()
+    # Provider/inference keys belong on the Providers page, not Tools.
+    if upper.endswith(("_BASE_URL", "_URL", "_HOST", "_PORT", "_MODEL")):
+        return False
+    return any(upper.endswith(suffix) for suffix in _CREDENTIAL_ENV_SUFFIXES)
+
+
 @app.get("/api/env")
 async def get_env_vars(profile: Optional[str] = None):
     with _profile_scope(profile):
@@ -4214,6 +4239,7 @@ async def get_env_vars(profile: Optional[str] = None):
             # CLI `hermes model` picker uses (not desktop-only prefix guesses).
             "provider": cat_meta.get("provider", ""),
             "provider_label": cat_meta.get("provider_label", ""),
+            "custom": bool(info.get("custom", False)),
         }
 
     result = {}
@@ -4225,6 +4251,24 @@ async def get_env_vars(profile: Optional[str] = None):
     for var_name in catalog_meta:
         if var_name not in result:
             result[var_name] = _row(var_name, {})
+    # Surface credential-shaped vars the user added via CLI or direct .env edits
+    # (``hermes config set MY_VENDOR_API_KEY …``) so Tools & Keys can manage them.
+    for var_name, value in env_on_disk.items():
+        if var_name in result or var_name in channel_keys:
+            continue
+        if not (value and str(value).strip()):
+            continue
+        if not _looks_like_tool_credential_env(var_name):
+            continue
+        result[var_name] = _row(
+            var_name,
+            {
+                "description": "Custom tool credential (added via Settings or CLI)",
+                "password": True,
+                "category": "tool",
+                "custom": True,
+            },
+        )
     return result
 
 
