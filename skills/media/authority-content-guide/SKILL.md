@@ -1,6 +1,7 @@
 ---
 name: authority-content-guide
 description: "Turn your expertise into on-brand content that builds authority and trust, grows your audience, attracts leads and converts into sales."
+platforms: [linux, macos, windows]
 ---
 
 # Authority Content Guide Skill

@@ -1,6 +1,7 @@
 ---
 name: finding-your-first-customer
 description: "Discover urgent product ideas from real customer workarounds, identify what to build by finding urgent customer problems and validate demand with paying customers before you build."
+platforms: [linux, macos, windows]
 ---
 
 # Finding First Customer
