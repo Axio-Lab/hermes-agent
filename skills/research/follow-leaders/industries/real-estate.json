@@ -1,0 +1,17 @@
+{
+  "industry": "Real Estate",
+  "slug": "real-estate",
+  "philosophy": "Prioritize active operators, developers, and brokers with disclosed deals — not generic guru content selling courses.",
+  "podcasts": [
+    { "name": "The Fort with Chris Powers", "youtubeChannelId": "", "youtubeUrl": "https://www.youtube.com/@thefortpod" },
+    { "name": "BiggerPockets Real Estate Podcast", "youtubeChannelId": "", "youtubeUrl": "https://www.youtube.com/@BiggerPockets" }
+  ],
+  "xAccounts": [
+    { "name": "Chris Powers", "handle": "@FortWorthChris", "why": "Active commercial real estate developer/operator, shares real deal mechanics." },
+    { "name": "Brian Burke", "handle": "@BrianBurke_CA", "why": "Multifamily operator/investor with disclosed long track record." }
+  ],
+  "subreddits": ["realestateinvesting", "CommercialRealEstate", "RealEstate"],
+  "blogs": [
+    { "name": "BiggerPockets Blog", "url": "https://www.biggerpockets.com/blog" }
+  ]
+}

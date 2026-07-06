@@ -1,0 +1,18 @@
+{
+  "industry": "Marketing",
+  "slug": "marketing",
+  "philosophy": "Prioritize people who run marketing for real companies with disclosed results, or who build marketing infrastructure/tools — not generic 'growth hacker' content.",
+  "podcasts": [
+    { "name": "Marketing Against The Grain", "youtubeChannelId": "", "youtubeUrl": "https://www.youtube.com/@MarketingAgainstTheGrain" },
+    { "name": "Everyone Hates Marketers", "youtubeChannelId": "", "youtubeUrl": "https://www.youtube.com/@EveryoneHatesMarketers" }
+  ],
+  "xAccounts": [
+    { "name": "Kieran Flanagan", "handle": "@Kieranflanagan", "why": "Senior marketing operator (ex-HubSpot, ex-Zapier), publishes original org/strategy breakdowns." },
+    { "name": "Ann Handley", "handle": "@MarketingProfs", "why": "Long career operating and teaching content marketing with original frameworks." },
+    { "name": "Ryan Reisert", "handle": "@ryanreisert", "why": "Cold outbound practitioner with hands-on tactical data." }
+  ],
+  "subreddits": ["marketing", "PPC", "content_marketing"],
+  "blogs": [
+    { "name": "Marketing Examples", "url": "https://marketingexamples.com/" }
+  ]
+}

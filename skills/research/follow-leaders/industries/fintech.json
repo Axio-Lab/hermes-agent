@@ -1,0 +1,32 @@
+{
+  "industry": "Fintech",
+  "slug": "fintech",
+  "philosophy": "Prioritize people who have shipped payments, banking, or lending infrastructure, or who run companies moving real money — not general finance commentators.",
+  "podcasts": [
+    { "name": "Fintech Insider", "youtubeChannelId": "", "youtubeUrl": "https://www.youtube.com/@FintechInsiderPodcast" },
+    { "name": "This Week in Fintech", "youtubeChannelId": "", "youtubeUrl": "https://www.youtube.com/@thisweekinfintech" },
+    { "name": "Acquired", "youtubeChannelId": "", "youtubeUrl": "https://www.youtube.com/@AcquiredFM" }
+  ],
+  "xAccounts": [
+    { "name": "Patrick Collison", "handle": "@patrickc", "profileUrl": "https://x.com/patrickc", "why": "Co-founder/CEO, Stripe — operating payments infrastructure at global scale." },
+    { "name": "Alex Rampell", "handle": "@arampell", "profileUrl": "https://x.com/arampell", "why": "a16z fintech investor and former founder, original frameworks on fintech unbundling." },
+    { "name": "Anish Acharya", "handle": "@anishacharya", "profileUrl": "https://x.com/anishacharya", "why": "a16z consumer/fintech investor, ex-operator." },
+    { "name": "Jason Mikula", "handle": "@mikulaja", "profileUrl": "https://x.com/mikulaja", "why": "Independent analyst, ex-bank/BaaS operator, deep original research on banking-as-a-service." },
+    { "name": "Ben Milne", "handle": "@BenMilne", "profileUrl": "https://x.com/BenMilne", "why": "Founder, Dwolla — hands-on payments infrastructure builder." }
+  ],
+  "linkedInProfiles": [
+    { "name": "Patrick Collison", "profileUrl": "https://www.linkedin.com/in/patrickcollison/", "why": "Stripe CEO; occasional long-form posts on payments and policy." },
+    { "name": "Jason Mikula", "profileUrl": "https://www.linkedin.com/in/jasonmikula/", "why": "Publishes original BaaS and embedded finance research." },
+    { "name": "Simon Taylor", "profileUrl": "https://www.linkedin.com/in/sytaylor/", "why": "Fintech operator/investor; substantive newsletter-style LinkedIn posts." }
+  ],
+  "instagramAccounts": [],
+  "tiktokAccounts": [],
+  "facebookPages": [],
+  "subreddits": ["fintech", "CreditCards", "personalfinance"],
+  "blogs": [
+    { "name": "a16z Fintech", "url": "https://a16z.com/fintech/" }
+  ],
+  "newsletters": [
+    { "name": "Fintech Brainfood", "url": "https://www.fintechbrainfood.com/", "why": "Simon Taylor — operator-grade weekly fintech analysis." }
+  ]
+}

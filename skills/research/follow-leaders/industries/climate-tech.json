@@ -1,0 +1,18 @@
+{
+  "industry": "Climate Tech",
+  "slug": "climate-tech",
+  "philosophy": "Prioritize engineers, founders, and policy operators actually deploying hardware/capital in energy and climate — not general sustainability commentary.",
+  "podcasts": [
+    { "name": "My Climate Journey", "youtubeChannelId": "", "youtubeUrl": "https://www.youtube.com/@mcjpod" },
+    { "name": "Volts", "youtubeChannelId": "", "youtubeUrl": "https://www.youtube.com/@davidrobertsvolts" }
+  ],
+  "xAccounts": [
+    { "name": "Jigar Shah", "handle": "@jigarshah", "why": "Former DOE Loan Programs Office director, career clean energy financier/operator." },
+    { "name": "Ramez Naam", "handle": "@ramez", "why": "Investor and technologist, original data-driven energy transition analysis." },
+    { "name": "Shayle Kann", "handle": "@shaylekann", "why": "Energy Impact Partners, ex-GTM Research — deep operating and market data background." }
+  ],
+  "subreddits": ["ClimateTech", "energy", "solar"],
+  "blogs": [
+    { "name": "Volts", "url": "https://www.volts.wtf/" }
+  ]
+}

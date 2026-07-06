@@ -1,0 +1,64 @@
+{
+  "industry": "Replace with industry display name, e.g. Fintech",
+  "slug": "replace-with-url-safe-slug",
+  "philosophy": "One line reminding future editors what counts as a 'leader' vs an 'influencer' in this specific industry.",
+  "podcasts": [
+    {
+      "name": "Show name",
+      "youtubeChannelId": "UC... (used to build the RSS feed URL)",
+      "youtubeUrl": "https://www.youtube.com/@handle"
+    }
+  ],
+  "xAccounts": [
+    {
+      "name": "Full name",
+      "handle": "@handle",
+      "profileUrl": "https://x.com/handle",
+      "why": "One line on why this person counts as an operator/original thinker here."
+    }
+  ],
+  "linkedInProfiles": [
+    {
+      "name": "Full name",
+      "profileUrl": "https://www.linkedin.com/in/slug/",
+      "why": "Operator role and why their LinkedIn posts or articles matter."
+    }
+  ],
+  "instagramAccounts": [
+    {
+      "name": "Brand or person",
+      "handle": "@handle",
+      "profileUrl": "https://www.instagram.com/handle/",
+      "why": "Only if they publish original operator content, not lifestyle filler."
+    }
+  ],
+  "tiktokAccounts": [
+    {
+      "name": "Brand or person",
+      "handle": "@handle",
+      "profileUrl": "https://www.tiktok.com/@handle",
+      "why": "Short-form only when they share firsthand operating insight."
+    }
+  ],
+  "facebookPages": [
+    {
+      "name": "Page name",
+      "pageUrl": "https://www.facebook.com/pagename",
+      "why": "Company or community page with substantive updates."
+    }
+  ],
+  "subreddits": ["subreddit_name_without_r_prefix"],
+  "blogs": [
+    {
+      "name": "Official company or personal blog",
+      "url": "https://example.com/blog"
+    }
+  ],
+  "newsletters": [
+    {
+      "name": "Newsletter name",
+      "url": "https://example.com/newsletter",
+      "why": "Written by an operator, not a link aggregator."
+    }
+  ]
+}

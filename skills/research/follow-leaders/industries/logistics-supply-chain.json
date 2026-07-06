@@ -1,0 +1,17 @@
+{
+  "industry": "Logistics & Supply Chain",
+  "slug": "logistics-supply-chain",
+  "philosophy": "Prioritize people running freight, warehousing, or supply chain infrastructure — not general 'future of trade' commentators.",
+  "podcasts": [
+    { "name": "The Logistics of Logistics", "youtubeChannelId": "", "youtubeUrl": "https://www.youtube.com/@thelogisticsoflogistics" },
+    { "name": "FreightWaves", "youtubeChannelId": "", "youtubeUrl": "https://www.youtube.com/@FreightWaves" }
+  ],
+  "xAccounts": [
+    { "name": "Craig Fuller", "handle": "@FreightAlley", "why": "Founder/CEO, FreightWaves — builds market data infrastructure for the freight industry." },
+    { "name": "Lior Susan", "handle": "@lior_susan", "why": "Eclipse Ventures, backs and helps operate hard-tech supply chain companies." }
+  ],
+  "subreddits": ["logistics", "supplychain", "Truckers"],
+  "blogs": [
+    { "name": "FreightWaves", "url": "https://www.freightwaves.com/" }
+  ]
+}

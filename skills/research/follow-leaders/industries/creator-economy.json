@@ -1,0 +1,18 @@
+{
+  "industry": "Creator Economy",
+  "slug": "creator-economy",
+  "philosophy": "Prioritize people who build the tools/platforms creators use or who run creator businesses at scale with disclosed numbers — not generic 'how to grow on social media' accounts.",
+  "podcasts": [
+    { "name": "Colin and Samir", "youtubeChannelId": "", "youtubeUrl": "https://www.youtube.com/@ColinandSamir" },
+    { "name": "The Come Up", "youtubeChannelId": "", "youtubeUrl": "https://www.youtube.com/@thecomeuppodcast" }
+  ],
+  "xAccounts": [
+    { "name": "Li Jin", "handle": "@ljin18", "why": "Founding investor/thinker who coined much of the creator-economy vocabulary from firsthand deal experience." },
+    { "name": "Colin and Samir", "handle": "@colinandsamir", "why": "Run a creator-focused media business and interview platform operators directly." },
+    { "name": "Matt Hartman", "handle": "@matthartman", "why": "Investor focused on creator infrastructure, publishes original market maps." }
+  ],
+  "subreddits": ["NewTubers", "PartneredYoutube", "content_marketing"],
+  "blogs": [
+    { "name": "Every", "url": "https://every.to/" }
+  ]
+}

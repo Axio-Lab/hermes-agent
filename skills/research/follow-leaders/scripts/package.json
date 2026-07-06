@@ -1,0 +1,11 @@
+{
+  "name": "follow-leaders-scripts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Fetch/prepare/deliver scripts for the follow-leaders skill. No dependencies — uses only Node's built-in https/fs modules so there's nothing to install beyond Node itself.",
+  "scripts": {
+    "fetch": "node fetch-content.js",
+    "prepare": "node prepare-digest.js",
+    "deliver": "node deliver.js"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "industry": "Healthtech",
+  "slug": "healthtech",
+  "philosophy": "Prioritize clinicians, operators, and founders who have built or run healthcare products/systems — not general wellness influencers.",
+  "podcasts": [
+    { "name": "Healthcare Unfiltered", "youtubeChannelId": "", "youtubeUrl": "https://www.youtube.com/@HealthcareUnfiltered" },
+    { "name": "Out of Pocket", "youtubeChannelId": "", "youtubeUrl": "https://www.youtube.com/@OutofPocketHealth" },
+    { "name": "The Health Care Blog Podcast", "youtubeChannelId": "", "youtubeUrl": "https://www.youtube.com/@thehealthcareblog" }
+  ],
+  "xAccounts": [
+    { "name": "Nikhil Krishnan", "handle": "@nikillinit", "why": "Founder, Out of Pocket — original, sourced healthcare industry analysis." },
+    { "name": "Eric Topol", "handle": "@EricTopol", "why": "Practicing cardiologist and researcher, original data-driven takes on medicine/AI." },
+    { "name": "Bob Kocher", "handle": "@bobkocher", "why": "Physician and investor with direct policy/operating experience." },
+    { "name": "Vinod Khosla", "handle": "@vkhosla", "why": "Investor with a long track record backing and operating alongside healthtech builders." }
+  ],
+  "subreddits": ["healthIT", "medicine", "healthcare"],
+  "blogs": [
+    { "name": "Out of Pocket", "url": "https://www.outofpocket.health/" }
+  ]
+}

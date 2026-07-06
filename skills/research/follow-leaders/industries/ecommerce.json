@@ -1,0 +1,19 @@
+{
+  "industry": "E-commerce",
+  "slug": "ecommerce",
+  "philosophy": "Prioritize people who run or built actual stores, brands, or e-commerce infrastructure — not generic 'dropshipping guru' content.",
+  "podcasts": [
+    { "name": "Shopify Masters", "youtubeChannelId": "", "youtubeUrl": "https://www.youtube.com/@shopify" },
+    { "name": "Honest Ecommerce", "youtubeChannelId": "", "youtubeUrl": "https://www.youtube.com/@HonestEcommerce" },
+    { "name": "Up Only", "youtubeChannelId": "", "youtubeUrl": "https://www.youtube.com/@UpOnlyTV" }
+  ],
+  "xAccounts": [
+    { "name": "Tobi Lutke", "handle": "@tobi", "why": "Founder/CEO, Shopify — builds the infrastructure the whole industry runs on." },
+    { "name": "Kian Golzari", "handle": "@KianGolzari", "why": "Sourcing/supply-chain operator, works directly with 8-figure brands." },
+    { "name": "Nik Sharma", "handle": "@mrsharma", "why": "DTC operator and investor, original tactical breakdowns from real brand P&Ls." }
+  ],
+  "subreddits": ["ecommerce", "shopify", "FulfillmentByAmazon"],
+  "blogs": [
+    { "name": "Shopify Engineering", "url": "https://shopify.engineering/" }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "profiles": [
+    {
+      "industry": "fintech",
+      "industrySlug": "fintech",
+      "frequency": "weekly",
+      "deliveryDay": "monday",
+      "deliveryTime": "08:00",
+      "timezone": "America/Los_Angeles",
+      "language": "english",
+      "delivery": {
+        "method": "stdout",
+        "email": null,
+        "telegramChatId": null
+      },
+      "lastDigestSentAt": null
+    }
+  ]
+}
