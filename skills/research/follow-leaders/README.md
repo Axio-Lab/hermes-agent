@@ -21,7 +21,7 @@ follow-leaders/
 ├── industries/
 ├── prompts/
 ├── scripts/          # YouTube RSS + Reddit JSON only
-└── examples/
+└── references/sample-digest.md
 ```
 
 User config: `~/.follow-leaders/`

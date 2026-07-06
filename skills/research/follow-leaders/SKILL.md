@@ -120,4 +120,4 @@ User overrides: `~/.follow-leaders/prompts/`.
 
 Composio uses the user's connected accounts via Verxio's bridge. Public fallback uses public endpoints only. State under `~/.follow-leaders/`.
 
-See `examples/sample-digest.md` for output shape.
+Before the first digest, read `references/sample-digest.md` for target output shape and tone.
