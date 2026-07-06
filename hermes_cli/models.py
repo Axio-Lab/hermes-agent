@@ -260,6 +260,7 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "gemini-2.5-pro",
     ],
     "gemini": [
+        "gemini-2.5-flash-lite",
         "gemini-3.1-pro-preview",
         "gemini-3-pro-preview",
         "gemini-3.5-flash",
