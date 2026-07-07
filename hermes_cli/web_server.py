@@ -6140,6 +6140,30 @@ async def update_messaging_platform(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@app.get("/api/messaging/slack/manifest")
+async def get_slack_manifest(
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    include_assistant: bool = True,
+):
+    """Return a Slack app manifest JSON users can paste into api.slack.com."""
+    from hermes_cli.slack_cli import _build_full_manifest
+
+    bot_name = (name or "Verxio").strip() or "Verxio"
+    bot_description = (
+        description or f"Your {bot_name} agent on Slack"
+    ).strip() or f"Your {bot_name} agent on Slack"
+    manifest = _build_full_manifest(
+        bot_name,
+        bot_description,
+        include_assistant=include_assistant,
+    )
+    return {
+        "manifest": manifest,
+        "json": json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+    }
+
+
 @app.post("/api/messaging/platforms/{platform_id}/test")
 async def test_messaging_platform(platform_id: str, profile: Optional[str] = None):
     entry = _catalog_lookup(platform_id)

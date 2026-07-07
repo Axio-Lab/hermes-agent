@@ -1768,6 +1768,15 @@ class TestWebServerEndpoints:
         assert resp.status_code == 200
         assert load_env()["SLACK_ALLOWED_USERS"] == "U01ABC2DEF3,U04XYZ5LMN6"
 
+    def test_get_slack_manifest_returns_socket_mode_manifest(self):
+        resp = self.client.get("/api/messaging/slack/manifest?name=Verxio")
+
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["manifest"]["settings"]["socket_mode_enabled"] is True
+        assert payload["manifest"]["display_information"]["name"] == "Verxio"
+        assert '"socket_mode_enabled": true' in payload["json"]
+
     def test_update_messaging_platform_rejects_swapped_slack_bot_token(self):
         resp = self.client.put(
             "/api/messaging/platforms/slack",
