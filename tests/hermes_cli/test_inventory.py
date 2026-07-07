@@ -729,6 +729,41 @@ def test_build_models_payload_no_max_models_returns_full_list():
     assert len(kilo_row["models"]) == 100
 
 
+def test_build_models_payload_verxio_hosted_scopes_to_current_provider(monkeypatch):
+    rows = [
+        {
+            "slug": "alibaba",
+            "name": "Qwen Cloud",
+            "models": ["qwen3.6-plus"],
+            "total_models": 1,
+            "is_current": False,
+            "is_user_defined": False,
+            "source": "built-in",
+        },
+        {
+            "slug": "gemini",
+            "name": "Google AI Studio",
+            "models": ["gemini-2.5-flash-lite"],
+            "total_models": 1,
+            "is_current": True,
+            "is_user_defined": False,
+            "source": "built-in",
+        },
+    ]
+    ctx = ConfigContext(
+        current_provider="gemini",
+        current_model="gemini-2.5-flash-lite",
+        current_base_url="",
+        user_providers={},
+        custom_providers=[],
+    )
+    monkeypatch.setenv("VERXIO_HOSTED", "1")
+    with _list_auth_returning(rows):
+        payload = build_models_payload(ctx, include_unconfigured=True)
+
+    assert [row["slug"] for row in payload["providers"]] == ["gemini"]
+
+
 # ─── refresh flag (cache-bust) ─────────────────────────────────────────
 
 

@@ -36,6 +36,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Optional
 
+import os
+
 
 # ─── Public types ───────────────────────────────────────────────────────
 
@@ -208,7 +210,7 @@ def build_models_payload(
                     row["models"] = filtered
                     row["total_models"] = len(filtered)
 
-    if include_unconfigured:
+    if include_unconfigured and not _verxio_hosted():
         rows = list(rows) + _append_unconfigured_rows(rows, ctx)
     if picker_hints:
         _apply_picker_hints(rows)
@@ -219,11 +221,30 @@ def build_models_payload(
     if capabilities:
         _apply_capabilities(rows)
 
+    rows = _filter_verxio_hosted_providers(rows, ctx)
+
     return {
         "providers": rows,
         "model": ctx.current_model,
         "provider": ctx.current_provider,
     }
+
+
+def _verxio_hosted() -> bool:
+    return os.getenv("VERXIO_HOSTED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _filter_verxio_hosted_providers(rows: list[dict], ctx: ConfigContext) -> list[dict]:
+    """Verxio Hosted injects one provider via the inference bridge — keep the picker scoped."""
+    if not _verxio_hosted():
+        return rows
+
+    provider = (ctx.current_provider or "").strip().lower()
+    if not provider:
+        return rows
+
+    matched = [row for row in rows if str(row.get("slug") or "").strip().lower() == provider]
+    return matched if matched else rows
 
 
 def _apply_capabilities(rows: list[dict]) -> None:
