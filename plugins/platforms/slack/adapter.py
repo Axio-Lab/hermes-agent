@@ -1025,6 +1025,9 @@ class SlackAdapter(BasePlatformAdapter):
             import re as _re
 
             _slash_names = [name for name, _d, _h in slack_native_slashes()]
+            # Verxio-branded manifests register /verxio instead of /hermes.
+            if "verxio" not in _slash_names:
+                _slash_names.append("verxio")
             if _slash_names:
                 _slash_pattern = _re.compile(
                     r"^/(?:" + "|".join(_re.escape(n) for n in _slash_names) + r")$"
@@ -3639,8 +3642,9 @@ class SlackAdapter(BasePlatformAdapter):
         if team_id and channel_id:
             self._channel_team[channel_id] = team_id
 
-        if slash_name in {"hermes", ""}:
-            # Legacy /hermes <subcommand> [args] routing + free-form questions.
+        if slash_name in {"hermes", "verxio", ""}:
+            # Legacy /hermes (or Verxio-branded /verxio) <subcommand> [args]
+            # routing + free-form questions.
             # Empty slash_name falls into this branch for backward compat
             # with any caller that didn't populate command["command"].
             from hermes_cli.commands import slack_subcommand_map

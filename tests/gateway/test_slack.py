@@ -253,7 +253,7 @@ class TestAppMentionHandler:
         import re as _re
 
         assert isinstance(slash_matcher, _re.Pattern)
-        for expected in ("/hermes", "/btw", "/stop", "/model", "/help"):
+        for expected in ("/hermes", "/verxio", "/btw", "/stop", "/model", "/help"):
             assert slash_matcher.match(
                 expected
             ), f"Slack slash regex does not match {expected}"
@@ -3215,6 +3215,19 @@ class TestSlashCommands:
         await adapter._handle_slash_command(command)
         msg = adapter.handle_message.call_args[0][0]
         assert msg.text == "what's the weather today?"
+
+    @pytest.mark.asyncio
+    async def test_verxio_catchall_matches_hermes_routing(self, adapter):
+        """Verxio-branded manifests use /verxio as the catch-all slash."""
+        command = {
+            "command": "/verxio",
+            "text": "btw run the tests",
+            "user_id": "U1",
+            "channel_id": "C1",
+        }
+        await adapter._handle_slash_command(command)
+        msg = adapter.handle_message.call_args[0][0]
+        assert msg.text == "/btw run the tests"
 
 
 # ---------------------------------------------------------------------------
