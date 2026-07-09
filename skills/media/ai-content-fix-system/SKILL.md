@@ -70,7 +70,7 @@ Ask conversationally (not a blank form):
 - What they want to be known for
 - Competitors or similar brands
 
-If they are unsure what they post: ask for at least 2 screenshots of their page, or a content CSV export. See `references/export-content.md`.
+If they are unsure what they post: ask for at least 2 screenshots of their page, or a content CSV export. See `references/platform-exports.md`.
 
 **Before any strategy**, explain:
 
@@ -173,7 +173,7 @@ After the plan, offer to hand off into `content-strategy` or `viral-content-blue
 
 | Path | Purpose |
 |------|---------|
-| `SKILL_DIR/references/export-content.md` | How to export Meta/other platform content for audits |
+| `SKILL_DIR/references/platform-exports.md` | How to export Meta/other platform content for audits |
 
 ## Credits
 

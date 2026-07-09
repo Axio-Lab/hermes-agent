@@ -53,7 +53,7 @@ def _load_frontmatter(skill_dir: Path) -> dict:
             "media",
             "ai-content-fix-system",
             [
-                "references/export-content.md",
+                "references/platform-exports.md",
             ],
         ),
     ],
@@ -88,7 +88,7 @@ def test_ai_content_fix_system_verxio_format() -> None:
     assert "Verxio orchestration" in src
     assert "Step 1:" in src
     assert "Step 4:" in src
-    assert "references/export-content.md" in src
+    assert "references/platform-exports.md" in src
     frontmatter = _load_frontmatter(SKILLS_ROOT / "media" / "ai-content-fix-system")
     assert len(frontmatter["description"]) <= 1024
 
