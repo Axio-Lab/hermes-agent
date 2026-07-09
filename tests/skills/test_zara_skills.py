@@ -1,4 +1,4 @@
-"""Smoke tests for bundled frontend-slides and youtube-to-ebook skills."""
+"""Smoke tests for bundled Verxio media/creative skills."""
 from __future__ import annotations
 
 import ast
@@ -49,6 +49,13 @@ def _load_frontmatter(skill_dir: Path) -> dict:
                 "scripts/main.py",
             ],
         ),
+        (
+            "media",
+            "ai-content-fix-system",
+            [
+                "references/export-content.md",
+            ],
+        ),
     ],
 )
 def test_bundled_skill_layout(category: str, name: str, required_paths: list[str]) -> None:
@@ -73,6 +80,17 @@ def test_youtube_to_ebook_verxio_orchestration() -> None:
     assert "Verxio orchestration" in src
     assert "prompts/write-article.md" in src
     assert "references/known-pitfalls.md" in src
+
+
+def test_ai_content_fix_system_verxio_format() -> None:
+    src = (SKILLS_ROOT / "media" / "ai-content-fix-system" / "SKILL.md").read_text(encoding="utf-8")
+    assert "When to use" in src
+    assert "Verxio orchestration" in src
+    assert "Step 1:" in src
+    assert "Step 4:" in src
+    assert "references/export-content.md" in src
+    frontmatter = _load_frontmatter(SKILLS_ROOT / "media" / "ai-content-fix-system")
+    assert len(frontmatter["description"]) <= 1024
 
 
 @pytest.mark.parametrize(
