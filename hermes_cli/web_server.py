@@ -9019,6 +9019,29 @@ async def test_mcp_server(name: str, profile: Optional[str] = None):
     }
 
 
+@app.post("/api/mcp/reload")
+async def reload_mcp_servers(profile: Optional[str] = None):
+    """Disconnect and reconnect MCP servers from the current config.yaml.
+
+    Used by Verxio after Composio connection changes so the agent picks up the
+    updated Tool Router session without restarting the runtime container.
+    """
+    try:
+        with _profile_scope(profile):
+            from tools.mcp_tool import discover_mcp_tools, shutdown_mcp_servers
+
+            shutdown_mcp_servers()
+            tools = discover_mcp_tools()
+        return {
+            "ok": True,
+            "toolCount": len(tools),
+            "message": f"Reloaded MCP servers ({len(tools)} tool(s)).",
+        }
+    except Exception as exc:
+        _log.exception("POST /api/mcp/reload failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 class MCPEnabledToggle(BaseModel):
     enabled: bool
     profile: Optional[str] = None

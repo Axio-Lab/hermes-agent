@@ -193,7 +193,10 @@ COPY . .
 
 # Pre-install WhatsApp bridge deps so dashboard QR pairing is instant in
 # container runtimes (avoids a multi-minute npm install on first pairing).
-RUN cd scripts/whatsapp-bridge && npm install --no-fund --no-audit --progress=false
+# Prefer HTTPS for GitHub deps — SSH keys are unavailable in Docker builds.
+RUN git config --global url."https://github.com/".insteadOf "ssh://git@github.com/" \
+ && git config --global url."https://github.com/".insteadOf "git@github.com:" \
+ && cd scripts/whatsapp-bridge && npm install --no-fund --no-audit --progress=false
 
 # ---------- Permissions ----------
 # Link hermes-agent itself (editable). Deps are already installed in the
