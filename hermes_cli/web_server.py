@@ -12521,15 +12521,32 @@ async def pty_ws(ws: WebSocket) -> None:
 @app.websocket("/api/ws")
 async def gateway_ws(ws: WebSocket) -> None:
     if not _DASHBOARD_EMBEDDED_CHAT_ENABLED:
+        await ws.accept()
         await ws.close(code=4403)
         return
 
-    if not _ws_auth_ok(ws):
-        await ws.close(code=4401)
+    # Accept before close on rejection. Closing without accept leaves many
+    # clients (including the Verxio API websockets proxy) hung until
+    # open_timeout instead of surfacing 4401/4403.
+    auth_reason, cred = _ws_auth_reason(ws)
+    if auth_reason is not None:
+        peer = ws.client.host if ws.client else "?"
+        _log.warning(
+            "gateway_ws auth rejected reason=%s mode=%s cred=%s peer=%s",
+            auth_reason,
+            _ws_auth_mode(),
+            cred,
+            peer,
+        )
+        await ws.accept()
+        await ws.close(code=4401, reason=_ws_close_reason(f"auth: {auth_reason}"))
         return
 
-    if not _ws_request_is_allowed(ws):
-        await ws.close(code=4403)
+    request_reason = _ws_request_reason(ws)
+    if request_reason is not None:
+        _log.warning("gateway_ws refused: %s", request_reason)
+        await ws.accept()
+        await ws.close(code=4403, reason=_ws_close_reason(request_reason))
         return
 
     from tui_gateway.ws import handle_ws
