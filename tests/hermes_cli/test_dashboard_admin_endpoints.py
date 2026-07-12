@@ -7,6 +7,8 @@ contract and the CLI-config parity (servers/keys written via the API are
 visible to the CLI data layer), not specific catalog values.
 """
 
+import types
+
 import pytest
 
 
@@ -87,6 +89,63 @@ class TestMcpEndpoints:
         assert self.client.put(
             "/api/mcp/servers/nope/enabled", json={"enabled": True}
         ).status_code == 404
+
+    def test_reload_refreshes_live_dashboard_sessions(self, monkeypatch):
+        import tools.mcp_tool as mcp_tool
+        from tui_gateway import server as tui_server
+
+        agent = types.SimpleNamespace(tools=[], valid_tool_names=set())
+        tui_server._sessions["live-composio"] = {"agent": agent, "session_key": "key"}
+        calls = []
+        emitted = []
+
+        monkeypatch.setattr(
+            mcp_tool,
+            "shutdown_mcp_servers",
+            lambda: calls.append("shutdown"),
+        )
+        monkeypatch.setattr(
+            mcp_tool,
+            "discover_mcp_tools",
+            lambda: [
+                {
+                    "function": {
+                        "name": "mcp_composio_GOOGLESHEETS_CREATE_SPREADSHEET",
+                    }
+                }
+            ],
+        )
+        monkeypatch.setattr(tui_server, "_load_enabled_toolsets", lambda: ["composio"])
+        monkeypatch.setattr(
+            tui_server,
+            "_session_info",
+            lambda _agent, _session: {"tools": 1},
+        )
+        monkeypatch.setattr(tui_server, "_emit", lambda *args: emitted.append(args))
+
+        def fake_refresh(target, *, enabled_override=None, quiet_mode=True, **_kwargs):
+            calls.append(("refresh", target, enabled_override, quiet_mode))
+            return {"mcp_composio_GOOGLESHEETS_CREATE_SPREADSHEET"}
+
+        monkeypatch.setattr(mcp_tool, "refresh_agent_mcp_tools", fake_refresh)
+
+        try:
+            response = self.client.post("/api/mcp/reload")
+        finally:
+            tui_server._sessions.pop("live-composio", None)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["ok"] is True
+        assert body["toolCount"] == 1
+        assert body["refreshedSessions"] == 1
+        assert body["refreshFailures"] == 0
+        assert calls[0] == "shutdown"
+        assert calls[1][0] == "refresh"
+        assert calls[1][1] is agent
+        assert calls[1][2] == ["composio"]
+        assert calls[1][3] is True
+        assert emitted == [("session.info", "live-composio", {"tools": 1})]
 
     def test_catalog_lists_entries(self):
         r = self.client.get("/api/mcp/catalog")

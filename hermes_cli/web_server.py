@@ -9028,14 +9028,58 @@ async def reload_mcp_servers(profile: Optional[str] = None):
     """
     try:
         with _profile_scope(profile):
-            from tools.mcp_tool import discover_mcp_tools, shutdown_mcp_servers
+            from tools.mcp_tool import (
+                discover_mcp_tools,
+                refresh_agent_mcp_tools,
+                shutdown_mcp_servers,
+            )
 
             shutdown_mcp_servers()
             tools = discover_mcp_tools()
+
+            try:
+                from tui_gateway import server as tui_server
+
+                live_sessions = list(tui_server._sessions.items())
+                enabled_toolsets = tui_server._load_enabled_toolsets()
+            except Exception:
+                live_sessions = []
+                enabled_toolsets = None
+
+            refreshed_sessions = 0
+            refresh_failures = 0
+            for sid, session in live_sessions:
+                agent = session.get("agent") if isinstance(session, dict) else None
+                if agent is None:
+                    continue
+                try:
+                    refresh_agent_mcp_tools(
+                        agent,
+                        enabled_override=enabled_toolsets,
+                        quiet_mode=True,
+                    )
+                    refreshed_sessions += 1
+                    try:
+                        tui_server._emit(
+                            "session.info",
+                            sid,
+                            tui_server._session_info(agent, session),
+                        )
+                    except Exception:
+                        pass
+                except Exception:
+                    refresh_failures += 1
+                    _log.warning(
+                        "Failed to refresh live MCP tools for session %s",
+                        sid,
+                        exc_info=True,
+                    )
         return {
             "ok": True,
             "toolCount": len(tools),
             "message": f"Reloaded MCP servers ({len(tools)} tool(s)).",
+            "refreshedSessions": refreshed_sessions,
+            "refreshFailures": refresh_failures,
         }
     except Exception as exc:
         _log.exception("POST /api/mcp/reload failed")
