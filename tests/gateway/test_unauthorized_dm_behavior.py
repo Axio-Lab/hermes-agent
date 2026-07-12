@@ -608,7 +608,11 @@ async def test_unauthorized_dm_pairs_by_default(monkeypatch):
         "tester",
     )
     adapter.send.assert_awaited_once()
-    assert "ABC12DEF" in adapter.send.await_args.args[1]
+    sent_text = adapter.send.await_args.args[1]
+    assert "ABC12DEF" in sent_text
+    assert "Verxio Web/Desktop" in sent_text
+    assert "Pairing requests" in sent_text
+    assert "hermes pairing approve" not in sent_text
 
 
 @pytest.mark.asyncio
@@ -798,7 +802,11 @@ async def test_no_allowlist_still_pairs_by_default(monkeypatch):
     assert result is None
     runner.pairing_store.generate_code.assert_called_once()
     adapter.send.assert_awaited_once()
-    assert "PAIR1234" in adapter.send.await_args.args[1]
+    sent_text = adapter.send.await_args.args[1]
+    assert "PAIR1234" in sent_text
+    assert "Verxio Web/Desktop" in sent_text
+    assert "Pairing requests" in sent_text
+    assert "hermes pairing approve" not in sent_text
 
 
 @pytest.mark.asyncio

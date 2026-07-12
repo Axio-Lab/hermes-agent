@@ -440,3 +440,6 @@ async def test_non_internal_event_without_user_triggers_pairing(monkeypatch, tmp
     assert adapter.send.await_count == 1
     sent_text = adapter.send.await_args.args[1]
     assert "don't recognize you" in sent_text
+    assert "Verxio Web/Desktop" in sent_text
+    assert "Pairing requests" in sent_text
+    assert "hermes pairing approve" not in sent_text

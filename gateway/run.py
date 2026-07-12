@@ -7440,6 +7440,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # In DMs: offer pairing code. In groups: silently ignore.
             if source.chat_type == "dm" and self._get_unauthorized_dm_behavior(source.platform) == "pair":
                 platform_name = source.platform.value if source.platform else "unknown"
+                platform_label = platform_name.replace("_", " ").title()
                 # Rate-limit ALL pairing responses (code or rejection) to
                 # prevent spamming the user with repeated messages when
                 # multiple DMs arrive in quick succession.
@@ -7453,10 +7454,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     if adapter:
                         await adapter.send(
                             source.chat_id,
-                            f"Hi~ I don't recognize you yet!\n\n"
-                            f"Here's your pairing code: `{code}`\n\n"
-                            f"Ask the bot owner to run:\n"
-                            f"`hermes pairing approve {platform_name} {code}`"
+                            f"Hi, I don't recognize you yet.\n\n"
+                            f"Your Verxio pairing code is `{code}`.\n\n"
+                            "Ask the bot owner to open Verxio Web/Desktop, go to "
+                            f"Messaging > {platform_label} > Pairing requests, "
+                            "paste this code, and approve access."
                         )
                 else:
                     adapter = self.adapters.get(source.platform)
