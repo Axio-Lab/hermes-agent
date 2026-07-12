@@ -640,11 +640,16 @@ class QueuedCommentaryAgent:
 
 
 class BackgroundReviewAgent:
+    seen_intervals = None
+
     def __init__(self, **kwargs):
         self.background_review_callback = kwargs.get("background_review_callback")
+        self._memory_nudge_interval = 10
+        self._skill_nudge_interval = 10
         self.tools = []
 
     def run_conversation(self, message, conversation_history=None, task_id=None):
+        type(self).seen_intervals = (self._memory_nudge_interval, self._skill_nudge_interval)
         if self.background_review_callback:
             self.background_review_callback("💾 Skill 'prospect-scanner' created.")
         return {
@@ -1018,7 +1023,8 @@ async def test_run_agent_queued_message_does_not_treat_commentary_as_final(monke
 
 
 @pytest.mark.asyncio
-async def test_run_agent_defers_background_review_notification_until_release(monkeypatch, tmp_path):
+async def test_run_agent_suppresses_background_review_notification(monkeypatch, tmp_path):
+    BackgroundReviewAgent.seen_intervals = None
     adapter, result = await _run_with_agent(
         monkeypatch,
         tmp_path,
@@ -1028,7 +1034,9 @@ async def test_run_agent_defers_background_review_notification_until_release(mon
     )
 
     assert result["final_response"] == "done"
+    assert BackgroundReviewAgent.seen_intervals == (0, 0)
     assert adapter.sent == []
+    assert adapter._post_delivery_callbacks == {}
 
 
 @pytest.mark.asyncio
