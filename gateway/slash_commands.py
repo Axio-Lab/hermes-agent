@@ -942,10 +942,10 @@ class GatewaySlashCommandsMixin:
         return EphemeralReply(t("gateway.restart.restarting"))
 
     async def _handle_version_command(self, event: MessageEvent) -> str:
-        """Handle /version — show the running Hermes Agent version."""
+        """Handle /version — show the running Verxio runtime version."""
         from hermes_cli.banner import format_banner_version_label
 
-        return format_banner_version_label()
+        return format_banner_version_label().replace("Hermes Agent", "Verxio")
 
     async def _handle_help_command(self, event: MessageEvent) -> str:
         """Handle /help command - list available commands."""
@@ -3916,7 +3916,7 @@ class GatewaySlashCommandsMixin:
                 return t("gateway.update.platform_not_messaging")
 
         if is_managed():
-            return f"✗ {format_managed_message('update Hermes Agent')}"
+            return f"✗ {format_managed_message('update Verxio')}"
 
         project_root = Path(__file__).parent.parent.resolve()
         git_dir = project_root / '.git'
