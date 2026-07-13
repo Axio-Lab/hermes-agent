@@ -9566,20 +9566,22 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             platform_name = source.platform.value
             env_key = _home_target_env_var(platform_name)
             if not os.getenv(env_key):
-                # Slack dispatches all Hermes commands through a single
-                # parent slash command `/hermes`; bare `/sethome` is not
-                # registered and would fail with "app did not respond".
-                sethome_cmd = (
-                    "/hermes sethome"
-                    if source.platform == Platform.SLACK
-                    else "/sethome"
-                )
+                if source.platform == Platform.SLACK:
+                    home_channel_hint = (
+                        "Open Verxio Web/Desktop > Messaging > Slack to choose "
+                        "the Slack home channel, or ignore this if you do not "
+                        "want scheduled deliveries here."
+                    )
+                else:
+                    home_channel_hint = (
+                        "Type /sethome to make this chat your home channel, "
+                        "or configure it in Verxio Web/Desktop > Messaging."
+                    )
                 notice = (
                     f"📬 No home channel is set for {platform_name.title()}. "
-                    f"A home channel is where Hermes delivers cron job results "
+                    f"A home channel is where Verxio delivers scheduled task results "
                     f"and cross-platform messages.\n\n"
-                    f"Type {sethome_cmd} to make this chat your home channel, "
-                    f"or ignore to skip."
+                    f"{home_channel_hint}"
                 )
                 await self._deliver_platform_notice(source, notice)
         

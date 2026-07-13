@@ -387,7 +387,7 @@ async def test_handle_message_persists_agent_token_counts(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_first_run_slack_home_channel_onboarding_uses_parent_command(monkeypatch):
+async def test_first_run_slack_home_channel_onboarding_points_to_verxio_messaging(monkeypatch):
     import gateway.run as gateway_run
 
     session_entry = SessionEntry(
@@ -426,7 +426,10 @@ async def test_first_run_slack_home_channel_onboarding_uses_parent_command(monke
     assert result == "ok"
     runner.adapters[Platform.SLACK].send.assert_awaited_once()
     onboarding = runner.adapters[Platform.SLACK].send.await_args.args[1]
-    assert "/hermes sethome" in onboarding
+    assert "Verxio Web/Desktop > Messaging > Slack" in onboarding
+    assert "scheduled task results" in onboarding
+    assert "Hermes" not in onboarding
+    assert "/hermes sethome" not in onboarding
     assert "Type /sethome" not in onboarding
 
 
@@ -471,6 +474,8 @@ async def test_first_run_non_slack_home_channel_onboarding_keeps_direct_command(
     runner.adapters[Platform.TELEGRAM].send.assert_awaited_once()
     onboarding = runner.adapters[Platform.TELEGRAM].send.await_args.args[1]
     assert "Type /sethome" in onboarding
+    assert "Verxio" in onboarding
+    assert "Hermes" not in onboarding
 
 
 @pytest.mark.asyncio
