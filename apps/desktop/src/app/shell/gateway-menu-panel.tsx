@@ -28,6 +28,9 @@ const PLATFORM_TONE: Record<string, StatusTone> = {
 
 const prettyState = (state: string) => state.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase())
 
+const optionalUnpairedPlatform = ([name, platform]: [string, StatusResponse['gateway_platforms'][string]]) =>
+  name === 'whatsapp' && (platform.error_code === 'whatsapp_not_paired' || platform.state === 'not_configured')
+
 // Strip leading "YYYY-MM-DD HH:MM:SS,mmm " and "[runtime_id] " prefixes from
 // log lines so they don't dominate the display. Full text preserved on hover.
 const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}[,.\d]*\s+/
@@ -61,7 +64,10 @@ export function GatewayMenuPanel({
         : copy.checkingInference
     : copy.disconnected
 
-  const platforms = Object.entries(statusSnapshot?.gateway_platforms || {}).sort(([l], [r]) => l.localeCompare(r))
+  const platforms = Object.entries(statusSnapshot?.gateway_platforms || {})
+    .filter(entry => !optionalUnpairedPlatform(entry))
+    .sort(([l], [r]) => l.localeCompare(r))
+
   const recentLogs = logLines.slice(-5)
 
   return (
