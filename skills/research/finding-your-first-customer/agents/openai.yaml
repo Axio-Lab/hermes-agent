@@ -1,0 +1,4 @@
+interface:
+  display_name: "Finding Your First Customer"
+  short_description: "Find evidence-backed early customer prospects"
+  default_prompt: "Use $finding-your-first-customer to find ten evidence-backed potential first customers for this product and create the final report."

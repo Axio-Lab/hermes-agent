@@ -1,212 +1,236 @@
 ---
 name: finding-your-first-customer
-description: "Discover urgent product ideas from real customer workarounds, identify what to build by finding urgent customer problems and validate demand with paying customers before you build."
+description: "Use when a user wants to find first customers, early adopters, design partners, beta users, startup validation prospects, urgent product opportunities, public pain or workaround signals, concierge offers, or an evidence-backed first-customer report from a product idea, URL, market, repository, or landing page."
+version: 1.2.0
+author: Verxio
+license: MIT
 platforms: [linux, macos, windows]
+metadata:
+  hermes:
+    tags: [research, customer-discovery, startup-validation, sales, prospects]
+    related_skills: [customer-research, prospecting]
 ---
 
-# Finding First Customer
-### A Positive Deviance Approach
+# Finding Your First Customer
 
-## When to use
+## Overview
 
-Load when the user wants to find product ideas, validate startup concepts, identify underserved markets, run product discovery, find first customers, or evaluate whether a problem is worth building. Trigger on: product idea, what should I build, is this worth building, find product opportunities, validate idea, first paying customer, first customer, zero to one, find customers, how do I get my first user, or exploring a market to enter.
+Turn a product idea, URL, landing page, repository, or market into a short, evidence-backed list of plausible first customers. Combine positive deviance discovery with public-signal prospecting: look for people already solving the problem manually, paying for inferior substitutes, complaining about the workflow, or showing a fresh adoption trigger.
+
+Treat every candidate as a research hypothesis. Say "potential customer based on public signals," not "buyer," "lead," or "interested prospect" unless the user provides explicit first-party confirmation.
+
+Read [references/research-framework.md](references/research-framework.md) before researching or scoring prospects. Read [references/report-artifact.md](references/report-artifact.md) before creating a final HTML report.
+
+## When to Use
+
+- Find a startup's first customers, early adopters, design partners, beta users, or first ten users.
+- Validate whether a product idea is urgent enough to build.
+- Identify public pain, workaround, switching, or "looking for a tool" signals.
+- Turn a landing page, repo, or product description into an ideal customer profile and outreach shortlist.
+- Create a source-based first-customer report with ranked prospects and manual outreach openers.
+
+Do not use this skill for TAM estimates, broad competitive landscape work, high-volume lead scraping, automated messaging, private contact enrichment, or CRM imports.
 
 ## Core Principle
 
-Zero-to-one products succeed by replicating deviant behaviors — users already solving a problem themselves, ineffectively. Their behavior is proof of urgency. The workaround IS the thesis. Find it. Charge for it manually. Then build.
+Zero-to-one products win by replicating deviant behavior: users already solving an urgent problem themselves, badly. The workaround is the thesis.
 
-**Fastest path to first paying user:**
-`observe workaround → identify deviant → concierge transaction → charge card → build`
+Fastest path:
 
-Not: ideate → prototype → launch → find users.
+```text
+observe workaround -> identify deviant -> offer concierge outcome -> charge manually -> build
+```
 
----
+Prefer these signals, in order:
 
-## Rules (Apply All)
+- `paid_workaround_exists` over `workaround_exists`
+- `time_spent_on_workaround` over stated willingness to pay
+- `urgency_this_week` over potential future need
+- `one_charged_card` over ten enthusiastic signups
+- `independent_parallel_invention` over one power-user workaround
 
-- `paid_workaround_exists > workaround_exists > problem_acknowledged`
-- `time_spent_on_workaround > stated_willingness_to_pay`
-- `urgency_now > potential_future_need`
-- `one_charged_card > ten_enthusiastic_signups`
-- `independent_parallel_invention > single_power_user_workaround`
-- `concierge_before_code` — always
-- `inefficient_behavior_is_signal_not_flaw`
+## Workflow
 
----
+### 1. Understand the Product
 
-## Discovery Process
+Inspect the supplied URL, repository, landing-page copy, or product description. Identify:
 
-### Step 1: Source Inputs
+- product and promised outcome
+- user, buyer, price point, and buying motion
+- urgent job to be done
+- current alternative or workaround
+- likely adoption trigger
+- geography, language, or segment constraints
+- disqualifiers that should remove weak matches
 
-Only use behavioral evidence. Reject stated preferences.
+Ask one concise question only when ambiguity would materially change the search. Otherwise infer safely and label the inference.
 
-**Valid sources:**
-- Forum threads (Reddit, HN, niche communities) where people describe their manual process
-- Support tickets showing workarounds users built themselves
-- Twitter/X threads where someone is clearly doing something manually that shouldn't be manual
-- Job postings that describe a role doing something that should be automated
-- Observed workflows (screen recordings, walkthroughs, demos)
-- User interviews focused on *what they did last week*, not *what they want*
+Completion criterion: the ICP is specific enough to reject a weak prospect without debate.
 
-**Reject:**
-- Market research reports
-- TAM/SAM/SOM estimates
-- Survey stated preferences
-- User enthusiasm without payment attempt
-- Waitlist signups without credit card
-- Problems users acknowledge but don't act on
+### 2. Run the Positive Deviance Tests
 
----
+Only use behavioral evidence. Reject stated preferences unless paired with action.
 
-### Step 2: Run the Required Tests
+Required tests:
 
-#### Test 1: Workaround Exists (REQUIRED — stop if no)
+1. **Workaround exists:** stop if there is no observable manual behavior.
+2. **Paid workaround tier:** classify the workaround:
+   - Tier 3: paid workaround, such as a consultant, VA, internal hire, or worse paid product.
+   - Tier 2: embarrassment-cost workaround, such as awkward manual sharing, public correction, or client-visible cleanup.
+   - Tier 1: free high-friction workaround, such as spreadsheets, copy-paste, manual tagging, scripts, or repeated DMs.
+3. **Independent parallel invention:** prefer at least three independent examples of the same workaround.
+4. **Urgency gate:** include only problems being solved now, not someday.
+5. **Switching friction:** favor pure subtraction over behavior change.
+6. **Build-vs-workaround delta:** proceed only when the product can be meaningfully better than the workaround.
 
-Is there an observable behavior where users are solving this problem manually?
-- Spreadsheets, DMs, copy-paste, numbering tweets, hiring a VA, emailing files to themselves
-- If no observable workaround exists: **stop — the problem isn't urgent enough**
+If a paid workaround and a reachable deviant exist, move to a manual concierge offer before recommending more product buildout.
 
-#### Test 2: Paid Workaround Tier
+Completion criterion: every candidate has a cited behavior, workaround, pain, or trigger.
 
-Classify the workaround type. Higher tier = stronger signal.
+### 3. Build a Public-Signal Search Plan
 
-| Tier | Type | Example | WTP Signal |
-|------|------|---------|-----------|
-| 3 | **Paid workaround** | Hiring consultant, buying worse product | Direct — this is your price floor |
-| 2 | **Embarrassment-cost workaround** | Emailing nudes for deletion, manual data entry in front of clients | Strong emotional unlock |
-| 1 | **Free high-friction workaround** | Numbering tweets manually, copy-pasting between apps | Proves urgency, weaker WTP |
+Use [references/research-framework.md](references/research-framework.md). Search several buckets:
 
-If `paid_workaround = true` → **build_now override** — skip urgency scoring, go straight to concierge.
+- explicit demand: "looking for," "recommend a tool," "alternative to," "does anything exist"
+- pain: "takes hours," "manual," "frustrating," "hate," "difficult," "keeps breaking"
+- workaround: spreadsheet, copy-paste, assistant, script, template, manual process
+- switching: cancellation, migration, missing feature, pricing complaint, competitor frustration
+- timing: hiring, launch, expansion, regulation, integration, new workflow, recent announcement
 
-#### Test 3: Independent Parallel Invention
+Prefer original public pages over snippets. Record URL, source type, visible date, observed evidence, and inference separately.
 
-Have multiple people built the *same* workaround independently, without knowing each other?
+Completion criterion: the search covers at least three distinct query/source angles unless the user requested a quick pass.
 
-- Pattern across ≥3 independent users = market signal
-- Single power user with unique setup = feature request, not product
-- Ask: "Did this person invent this workaround or copy it from someone?"
+### 4. Research Safely
 
-#### Test 4: Urgency Gate (Binary — not a scale)
+- Use only public, intentionally shared professional or business information.
+- Do not bypass login walls, paywalls, access controls, rate limits, or robots restrictions.
+- Do not use data brokers, leaked datasets, private groups, personal email discovery, phone enrichment, or sensitive personal information.
+- Do not infer protected traits or target people using health, financial hardship, political belief, sexuality, religion, or other sensitive attributes.
+- Prefer companies, public professional profiles, public requests, product reviews, public community posts, GitHub issues, job posts, changelogs, and company announcements.
+- Quote minimally and paraphrase by default. Link every material pain or timing signal.
 
-> "Is this user solving this problem *this week*, not someday?"
+Completion criterion: every material claim about a prospect can be traced to a public source or is clearly labeled as an inference.
 
-- Yes → proceed
-- No → discard or reframe as roadmap item
+### 5. Score, Deduplicate, and Stage Prospects
 
-Do not score urgency 1–10. That invites rationalization. It's yes/no.
+Score each prospect using the bundled framework:
 
-#### Test 5: Switching Friction
+- pain strength
+- product fit
+- timing
+- public reachability
+- evidence quality
 
-How hard is it to switch from the workaround to your product?
+Stages:
 
-- **Pure subtraction** (same behavior, less friction) → fast conversion
-- **Behavior change required** → slow conversion, needs 10x delta
-- **Workflow-embedded workaround** (e.g., Airtable hack that 5 people use) → high switching cost, needs strong pull
+- **High intent:** publicly requesting a solution, actively switching, or paying for an inferior workaround.
+- **Problem aware:** clearly describing the pain or expensive workaround.
+- **Trigger present:** a current business event makes the product relevant.
+- **Potential fit:** ICP match with incomplete evidence. Keep outside the primary shortlist.
 
-#### Test 6: Build vs Workaround Delta
+Remove duplicates and weak matches. A prospect without a cited pain, need, workaround, or timing signal must not appear in the primary shortlist.
 
-| Delta | Signal |
-|-------|--------|
-| 10x better | Strong pull — users switch without being sold |
-| 2x better | Weak pull — needs marketing |
-| Parity | No reason to switch — stop |
+Completion criterion: the shortlist favors fewer high-confidence prospects over a generic lead list.
 
----
+### 6. Draft Outreach, Never Send It
 
-### Step 3: Concierge Gate (Before Any Code)
+Write one short opener grounded only in cited public context:
 
-**This is the fastest path to first paying user.**
+```text
+Saw your public note about [specific workflow/pain]. I am testing a way to [outcome] without [workaround]. I can do it manually for [price or next step] by [date]. Worth a quick look?
+```
 
-Before writing a line of code:
-1. Identify one deviant
-2. Offer to deliver the outcome *manually*
-3. Charge them for it
-4. Success condition = credit card charged
+Rules:
 
-If you can't charge for a manual version, your product framing is wrong — not the market.
+- Keep the opener under 90 words by default.
+- Do not pretend familiarity or mention unrelated personal details.
+- Recommend the natural public or professional channel already associated with the source.
+- Do not send messages, submit forms, connect, follow, comment, or create CRM records unless the user separately authorizes that action.
 
-Script template:
-> "I noticed you've been [workaround behavior]. I can [outcome] for you manually by [date] for $[price]. Want me to handle it?"
+Completion criterion: the opener would still be truthful if the prospect read the report source-by-source.
 
-Do not ask "would you use this?" That is not a charge. That is a survey.
+### 7. Produce the Report
 
----
+Lead with the most actionable evidence. Use this order:
+
+1. **Verdict:** whether reachable early-customer signals exist.
+2. **ICP:** buyer, user, trigger, workaround, and disqualifiers.
+3. **Top prospect:** strongest evidence-backed candidate and why now.
+4. **Prospect shortlist:** source, pain signal, score, stage, why now, channel, and opener.
+5. **Repeated patterns:** pains and triggers appearing across prospects.
+6. **Seven-day validation plan:** manual, low-volume outreach and concierge testing.
+7. **Limits:** missing evidence and what real conversations must confirm.
+
+Create a standalone HTML report unless the user explicitly requests chat-only output:
+
+1. Structure the analysis JSON using [references/report-artifact.md](references/report-artifact.md).
+2. Run `python3 scripts/generate_report.py <analysis.json> outputs/first-customer-report.html` from this skill directory, or pass absolute paths.
+3. Verify the report includes prospect cards, source links, scores, repeated patterns, outreach plan, and limitations.
+4. Return a clickable absolute file link.
+
+## Modes
+
+- **quick:** qualify up to five strong prospects.
+- **standard:** qualify up to ten prospects across several source types. Use this by default.
+- **deep:** qualify up to twenty prospects and map repeated pain patterns.
+- **design-partners:** prioritize people willing to test and give feedback over immediate buyers.
+- **b2b:** prioritize companies, public business triggers, and relevant decision roles.
+- **community:** prioritize public discussion and explicit request signals.
 
 ## Required Outputs
 
-### 1. Deviance Table
+### Deviance Table
 
-| # | Observed Behavior | Platform/Context | Workaround Method | Workaround Tier | Cost of Workaround |
+| # | Observed behavior | Platform/context | Workaround method | Tier | Cost of workaround |
 |---|---|---|---|---|---|
 | 1 | | | | 1/2/3 | time + money + embarrassment |
 
-Quantify where possible. "2 hrs/week × $50/hr = $100/week" beats "annoying."
+Quantify where possible. "2 hrs/week x $50/hr = $100/week" beats "annoying."
 
-### 2. First Customer Profile
+### First-Customer Profile
 
-For each deviant identified:
-
-```
+```text
 Who they are:        [specific description, not "SMBs" or "developers"]
-Where to find them:  [exact subreddit, community, job board, hashtag]
-Why they care now:   [what changed recently that makes this urgent]
-DM/reply script:     [exact message to send today offering the concierge]
-Offer framing:       ["I'll do X manually for $Y by Friday" — not a survey invite]
+Where to find them:  [exact source, community, job board, hashtag, or public page]
+Why they care now:   [what changed recently or what they are already doing]
+Evidence:            [source URL and observed signal]
+Concierge offer:     ["I will do X manually for $Y by Friday"]
+Outreach opener:     [exact message draft, not sent automatically]
 ```
 
-### 3. Workaround Cost Calculation
-
-```
-Time cost:         X hrs/week × hourly rate = $/week
-Money cost:        tools/services they're paying for workaround
-Embarrassment:     describe the social/reputational friction
-Total weekly cost: $X
-Annualized:        $Y  ← this is your price ceiling for annual contract
-```
-
-### 4. Verdict
+### Verdict
 
 | Verdict | Condition | Action |
-|---------|-----------|--------|
-| **CHARGE NOW (MANUALLY)** | Paid workaround exists, deviant identified, concierge feasible | Send the DM today, charge before building |
-| **INTERVIEW AND CHARGE** | Workaround exists, deviants found, no paid signal yet | Talk to 3 deviants this week, attempt charge at end of each call |
-| **WATCH AND WAIT** | Parallel invention pattern emerging, <3 independent cases | Monitor for 30 days, set a trigger to recheck |
-| **DISCARD** | No observable workaround, or free low-friction workaround only | Kill — move to next idea |
+|---|---|---|
+| **Charge now manually** | Paid workaround exists, deviant identified, concierge feasible | Send a manual, authorized outreach and charge before building |
+| **Interview and charge** | Workaround exists, deviants found, no paid signal yet | Talk to three deviants this week and attempt a paid concierge close |
+| **Watch and wait** | Parallel invention pattern is emerging but evidence is thin | Monitor for 30 days and define a recheck trigger |
+| **Discard** | No observable workaround or only low-friction free behavior | Kill or reframe the idea |
 
----
+## Quality Bar
 
-## Worked Example Skeleton
+- Link every primary prospect to at least one meaningful public signal.
+- Prefer ten strong matches over a long generic list.
+- Make uncertainty and stale evidence visible.
+- Separate observed evidence from inference.
+- Keep outreach manual, respectful, and reversible.
+- End with what must be validated through real conversations.
 
-**Domain:** [fill in]
+## Common Pitfalls
 
-**Observed workaround:** [what people are doing manually]
+1. **Turning ICP fit into evidence.** Industry match is not enough; require public pain, workaround, demand, or timing.
+2. **Treating a prospect as consented.** Public signals justify research, not claims of interest.
+3. **Skipping the paid manual test.** If the product can be done manually, test willingness to pay before building.
+4. **Over-personalizing outreach.** Use only the cited business context.
+5. **Letting stale signals look fresh.** Show dates and lower timing scores when evidence is old.
 
-**Where found:** [subreddit / thread / support ticket]
+## Verification Checklist
 
-**Workaround tier:** [1/2/3]
-
-**Independent parallel invention:** [yes/no — how many found?]
-
-**Urgency gate:** [this week yes/no]
-
-**Switching friction:** [pure subtraction / behavior change]
-
-**10x delta achievable:** [yes/no — how]
-
-**Concierge feasibility:** [can I do this manually today for $X?]
-
-**First DM:** [exact message]
-
-**Verdict:** [CHARGE NOW / INTERVIEW AND CHARGE / WATCH AND WAIT / DISCARD]
-
----
-
-## What This Skill Does Not Do
-
-- TAM estimates
-- Competitive landscape analysis as primary signal
-- Roadmap planning
-- Pricing strategy (beyond workaround cost as floor/ceiling)
-- GTM beyond first 10 customers
-
-For scale, use a different framework. This skill terminates at first paying user.
+- [ ] ICP and disqualifiers are explicit.
+- [ ] Positive deviance tests were applied.
+- [ ] Each primary prospect has a public source URL.
+- [ ] Scores use the five-dimension framework.
+- [ ] Outreach drafts are clearly drafts and were not sent.
+- [ ] Report labels prospects as potential customers based on public signals.
+- [ ] HTML report, when requested or expected, was generated and opened or inspected.
