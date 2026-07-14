@@ -45,7 +45,7 @@ await build({
   banner: {
     js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);"
   },
-  logLevel: 'info'
+  logLevel: 'error'
 })
 
 // esbuild preserves the shebang from src/entry.tsx into the bundle, but Nix's

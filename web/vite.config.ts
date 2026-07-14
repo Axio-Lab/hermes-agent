@@ -83,6 +83,7 @@ export default defineConfig({
     ],
   },
   build: {
+    chunkSizeWarningLimit: 2500,
     outDir: "../hermes_cli/web_dist",
     emptyOutDir: true,
   },
