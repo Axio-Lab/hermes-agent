@@ -130,9 +130,13 @@ COPY ui-tui/packages/hermes-ink/ ui-tui/packages/hermes-ink/
 # `_tui_need_npm_install()` check on every startup, and triggered a
 # runtime `npm install` that then failed with EACCES.  Keeping the env
 # guards against a future regression if the source npm version changes.
-ENV npm_config_install_links=false
+ENV npm_config_install_links=false \
+    npm_config_audit=false \
+    npm_config_fund=false \
+    npm_config_update_notifier=false \
+    NO_UPDATE_NOTIFIER=1
 
-RUN npm install --prefer-offline --no-audit && \
+RUN npm install --prefer-offline --no-audit --no-fund && \
     npx playwright install --with-deps chromium --only-shell && \
     npm cache clean --force
 
