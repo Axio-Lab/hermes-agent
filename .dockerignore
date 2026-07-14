@@ -23,6 +23,10 @@ node_modules
 **/node_modules
 .venv
 **/.venv
+.cache/
+**/.cache/
+.turbo/
+**/.turbo/
 .notebooklm-cli-venv/
 .notebooklm-playwright/
 .pip-cache/
@@ -33,6 +37,8 @@ node_modules
 # that now depends on the full ui-tui/packages/hermes-ink/ tree being present.
 ui-tui/dist/
 ui-tui/packages/hermes-ink/dist/
+web/dist/
+hermes_cli/web_dist/
 
 # CI/CD
 .github
@@ -50,7 +56,19 @@ ui-tui/packages/hermes-ink/dist/
 # Testing
 .pytest_cache/
 .coverage
+coverage/
+**/coverage/
 htmlcov/
+
+# Logs, temporary files, and local databases
+logs/
+**/logs/
+*.log
+*.tmp
+*.bak
+*.sqlite
+*.sqlite3
+*.db
 
 # Documentation
 *.md
