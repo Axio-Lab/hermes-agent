@@ -772,6 +772,16 @@ class AudioTranscriptionRequest(BaseModel):
     mime_type: Optional[str] = None
 
 
+class AgentOneshotRequest(BaseModel):
+    input: str = ""
+    instructions: Optional[str] = None
+    template: Optional[str] = None
+    variables: Optional[Dict[str, Any]] = None
+    task: Optional[str] = None
+    max_tokens: Optional[int] = None
+    temperature: Optional[float] = None
+
+
 class ManagedFileUpload(BaseModel):
     path: str
     data_url: str
@@ -2780,6 +2790,45 @@ async def transcribe_audio_upload(payload: AudioTranscriptionRequest):
         "transcript": str(result.get("transcript") or "").strip(),
         "provider": result.get("provider"),
     }
+
+
+@app.post("/api/agent/oneshot")
+def agent_oneshot(payload: AgentOneshotRequest):
+    instructions = (payload.instructions or "").strip()
+    user_input = payload.input or ""
+    template = (payload.template or "").strip() or None
+    task = (payload.task or "title_generation").strip() or "title_generation"
+
+    if not template and not instructions and not user_input.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="One-shot generation requires input, instructions, or a template.",
+        )
+
+    try:
+        from agent.oneshot import run_oneshot
+
+        output = run_oneshot(
+            instructions=instructions,
+            user_input=user_input,
+            template=template,
+            variables=payload.variables or {},
+            task=task,
+            max_tokens=payload.max_tokens or 1024,
+            temperature=payload.temperature if payload.temperature is not None else 0.3,
+        ).strip()
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _log.warning("POST /api/agent/oneshot failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"One-shot generation failed: {exc}") from exc
+
+    if not output:
+        raise HTTPException(status_code=502, detail="One-shot generation returned an empty response.")
+
+    return {"output": output, "text": output}
 
 
 class TTSSpeakRequest(BaseModel):
