@@ -138,7 +138,7 @@ ENV npm_config_install_links=false \
 
 RUN npm install --prefer-offline --no-audit --no-fund && \
     npx playwright install --with-deps chromium --only-shell && \
-    npm cache clean --force
+    rm -rf /root/.npm
 
 # ---------- Layer-cached Python dependency install ----------
 # Copy only pyproject.toml + uv.lock so the Python dep resolve + wheel
