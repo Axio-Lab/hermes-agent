@@ -6,12 +6,12 @@ Provides speech-to-text transcription with six providers:
 
   - **local** (default, free) — faster-whisper running locally, no API key needed.
     Auto-downloads the model (~150 MB for ``base``) on first use.
-  - **groq** (free tier) — Groq Whisper API, requires ``GROQ_API_KEY``.
+  - **groq** (free tier) — Groq Whisper API, requires ``STT_GROQ_API_KEY``.
   - **openai** (paid) — OpenAI Whisper API, requires ``VOICE_TOOLS_OPENAI_KEY``.
-  - **mistral** — Mistral Voxtral Transcribe API, requires ``MISTRAL_API_KEY``.
-  - **xai** — xAI Grok STT API, requires ``XAI_API_KEY``. High accuracy,
+  - **mistral** — Mistral Voxtral Transcribe API, requires ``STT_MISTRAL_API_KEY``.
+  - **xai** — xAI Grok STT API, requires ``STT_XAI_API_KEY``. High accuracy,
     Inverse Text Normalization, diarization, 21 languages.
-  - **elevenlabs** — ElevenLabs Scribe API, requires ``ELEVENLABS_API_KEY``.
+  - **elevenlabs** — ElevenLabs Scribe API, requires ``STT_ELEVENLABS_API_KEY``.
 
 Used by the messaging gateway to automatically transcribe voice messages
 sent by users on Telegram, Discord, WhatsApp, Slack, and Signal.
@@ -60,6 +60,40 @@ def get_env_value(name, default=None):
         return os.getenv(name, default)
     value = _get_env_value(name)
     return default if value is None else value
+
+
+STT_GROQ_API_KEY_ENV = "STT_GROQ_API_KEY"
+LEGACY_GROQ_API_KEY_ENV = "GROQ_API_KEY"
+STT_MISTRAL_API_KEY_ENV = "STT_MISTRAL_API_KEY"
+LEGACY_MISTRAL_API_KEY_ENV = "MISTRAL_API_KEY"
+STT_XAI_API_KEY_ENV = "STT_XAI_API_KEY"
+LEGACY_XAI_API_KEY_ENV = "XAI_API_KEY"
+STT_ELEVENLABS_API_KEY_ENV = "STT_ELEVENLABS_API_KEY"
+LEGACY_ELEVENLABS_API_KEY_ENV = "ELEVENLABS_API_KEY"
+
+
+def _first_env_value(*names: str) -> str:
+    for name in names:
+        value = str(get_env_value(name) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _groq_stt_api_key() -> str:
+    return _first_env_value(STT_GROQ_API_KEY_ENV, LEGACY_GROQ_API_KEY_ENV)
+
+
+def _mistral_stt_api_key() -> str:
+    return _first_env_value(STT_MISTRAL_API_KEY_ENV, LEGACY_MISTRAL_API_KEY_ENV)
+
+
+def _xai_stt_api_key() -> str:
+    return _first_env_value(STT_XAI_API_KEY_ENV, LEGACY_XAI_API_KEY_ENV)
+
+
+def _elevenlabs_stt_api_key() -> str:
+    return _first_env_value(STT_ELEVENLABS_API_KEY_ENV, LEGACY_ELEVENLABS_API_KEY_ENV)
 
 # ---------------------------------------------------------------------------
 # Optional imports — graceful degradation
@@ -784,10 +818,10 @@ def _get_provider(stt_config: dict) -> str:
             return "none"
 
         if provider == "groq":
-            if _HAS_OPENAI and get_env_value("GROQ_API_KEY"):
+            if _HAS_OPENAI and _groq_stt_api_key():
                 return "groq"
             logger.warning(
-                "STT provider 'groq' configured but GROQ_API_KEY not set"
+                "STT provider 'groq' configured but STT_GROQ_API_KEY/GROQ_API_KEY not set"
             )
             return "none"
 
@@ -800,18 +834,18 @@ def _get_provider(stt_config: dict) -> str:
             return "none"
 
         if provider == "mistral":
-            if _HAS_MISTRAL and get_env_value("MISTRAL_API_KEY"):
+            if _HAS_MISTRAL and _mistral_stt_api_key():
                 return "mistral"
             logger.warning(
                 "STT provider 'mistral' configured but mistralai package "
-                "not installed or MISTRAL_API_KEY not set"
+                "not installed or STT_MISTRAL_API_KEY/MISTRAL_API_KEY not set"
             )
             return "none"
 
         if provider == "xai":
             from tools.xai_http import resolve_xai_http_credentials
 
-            if resolve_xai_http_credentials().get("api_key"):
+            if _xai_stt_api_key() or resolve_xai_http_credentials().get("api_key"):
                 return "xai"
             logger.warning(
                 "STT provider 'xai' configured but no xAI credentials are available"
@@ -819,10 +853,10 @@ def _get_provider(stt_config: dict) -> str:
             return "none"
 
         if provider == "elevenlabs":
-            if get_env_value("ELEVENLABS_API_KEY"):
+            if _elevenlabs_stt_api_key():
                 return "elevenlabs"
             logger.warning(
-                "STT provider 'elevenlabs' configured but ELEVENLABS_API_KEY not set"
+                "STT provider 'elevenlabs' configured but STT_ELEVENLABS_API_KEY/ELEVENLABS_API_KEY not set"
             )
             return "none"
 
@@ -839,7 +873,7 @@ def _get_provider(stt_config: dict) -> str:
     # Try lazy-install before falling through to cloud providers
     if _try_lazy_install_stt():
         return "local"
-    if _HAS_OPENAI and get_env_value("GROQ_API_KEY"):
+    if _HAS_OPENAI and _groq_stt_api_key():
         logger.info("No local STT available, using Groq Whisper API")
         return "groq"
     if _HAS_OPENAI and _has_openai_audio_backend():
@@ -848,18 +882,18 @@ def _get_provider(stt_config: dict) -> str:
     # Only auto-select Mistral if the SDK is already present — don't trigger a
     # lazy-install during passive auto-detection. Explicit `provider: mistral`
     # (above) does lazy-install on first transcription call.
-    if _HAS_MISTRAL and get_env_value("MISTRAL_API_KEY"):
+    if _HAS_MISTRAL and _mistral_stt_api_key():
         logger.info("No local STT available, using Mistral Voxtral Transcribe API")
         return "mistral"
     try:
         from tools.xai_http import resolve_xai_http_credentials
 
-        if resolve_xai_http_credentials().get("api_key"):
+        if _xai_stt_api_key() or resolve_xai_http_credentials().get("api_key"):
             logger.info("No local STT available, using xAI Grok STT API")
             return "xai"
     except Exception:
         pass
-    if get_env_value("ELEVENLABS_API_KEY"):
+    if _elevenlabs_stt_api_key():
         logger.info("No local STT available, using ElevenLabs Scribe STT API")
         return "elevenlabs"
     return "none"
@@ -1276,9 +1310,13 @@ def _transcribe_local_command(file_path: str, model_name: str) -> Dict[str, Any]
 
 def _transcribe_groq(file_path: str, model_name: str) -> Dict[str, Any]:
     """Transcribe using Groq Whisper API (free tier available)."""
-    api_key = get_env_value("GROQ_API_KEY")
+    api_key = _groq_stt_api_key()
     if not api_key:
-        return {"success": False, "transcript": "", "error": "GROQ_API_KEY not set"}
+        return {
+            "success": False,
+            "transcript": "",
+            "error": "STT_GROQ_API_KEY or GROQ_API_KEY not set",
+        }
 
     if not _HAS_OPENAI:
         return {"success": False, "transcript": "", "error": "openai package not installed"}
@@ -1387,11 +1425,15 @@ def _transcribe_mistral(file_path: str, model_name: str) -> Dict[str, Any]:
     """Transcribe using Mistral Voxtral Transcribe API.
 
     Uses the ``mistralai`` Python SDK to call ``/v1/audio/transcriptions``.
-    Requires ``MISTRAL_API_KEY`` environment variable.
+    Requires ``STT_MISTRAL_API_KEY`` or legacy ``MISTRAL_API_KEY`` environment variable.
     """
-    api_key = get_env_value("MISTRAL_API_KEY")
+    api_key = _mistral_stt_api_key()
     if not api_key:
-        return {"success": False, "transcript": "", "error": "MISTRAL_API_KEY not set"}
+        return {
+            "success": False,
+            "transcript": "",
+            "error": "STT_MISTRAL_API_KEY or MISTRAL_API_KEY not set",
+        }
 
     try:
         try:
@@ -1432,17 +1474,18 @@ def _transcribe_xai(file_path: str, model_name: str) -> Dict[str, Any]:
 
     Uses the ``POST /v1/stt`` REST endpoint with multipart/form-data.
     Supports Inverse Text Normalization, diarization, and word-level timestamps.
-    Requires ``XAI_API_KEY`` environment variable.
+    Requires ``STT_XAI_API_KEY``, legacy ``XAI_API_KEY``, or xAI OAuth credentials.
     """
     from tools.xai_http import resolve_xai_http_credentials
 
+    direct_api_key = _xai_stt_api_key()
     creds = resolve_xai_http_credentials()
-    api_key = str(creds.get("api_key") or "").strip()
+    api_key = direct_api_key or str(creds.get("api_key") or "").strip()
     if not api_key:
         return {
             "success": False,
             "transcript": "",
-            "error": "No xAI credentials found. Configure xAI OAuth in `hermes model` or set XAI_API_KEY",
+            "error": "No xAI credentials found. Configure xAI OAuth or set STT_XAI_API_KEY/XAI_API_KEY",
         }
 
     stt_config = _load_stt_config()
@@ -1536,9 +1579,13 @@ def _transcribe_xai(file_path: str, model_name: str) -> Dict[str, Any]:
 
 def _transcribe_elevenlabs(file_path: str, model_name: str) -> Dict[str, Any]:
     """Transcribe using ElevenLabs Scribe STT API."""
-    api_key = get_env_value("ELEVENLABS_API_KEY")
+    api_key = _elevenlabs_stt_api_key()
     if not api_key:
-        return {"success": False, "transcript": "", "error": "ELEVENLABS_API_KEY not set"}
+        return {
+            "success": False,
+            "transcript": "",
+            "error": "STT_ELEVENLABS_API_KEY or ELEVENLABS_API_KEY not set",
+        }
 
     stt_config = _load_stt_config()
     elevenlabs_config = stt_config.get("elevenlabs", {})
@@ -1743,9 +1790,9 @@ def transcribe_audio(file_path: str, model: Optional[str] = None) -> Dict[str, A
         "error": (
             "No STT provider available. Install faster-whisper for free local "
             f"transcription, configure {LOCAL_STT_COMMAND_ENV} or install a local whisper CLI, "
-            "set GROQ_API_KEY for free Groq Whisper, set MISTRAL_API_KEY for Mistral "
-            "Voxtral Transcribe, configure xAI OAuth or set XAI_API_KEY for xAI Grok STT, "
-            "set ELEVENLABS_API_KEY for ElevenLabs Scribe, or set VOICE_TOOLS_OPENAI_KEY "
+            "set STT_GROQ_API_KEY for free Groq Whisper, set STT_MISTRAL_API_KEY for Mistral "
+            "Voxtral Transcribe, configure xAI OAuth or set STT_XAI_API_KEY for xAI Grok STT, "
+            "set STT_ELEVENLABS_API_KEY for ElevenLabs Scribe, or set VOICE_TOOLS_OPENAI_KEY "
             "or OPENAI_API_KEY for the OpenAI Whisper API."
         ),
     }
