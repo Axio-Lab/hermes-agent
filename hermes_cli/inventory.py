@@ -221,8 +221,6 @@ def build_models_payload(
     if capabilities:
         _apply_capabilities(rows)
 
-    rows = _filter_verxio_hosted_providers(rows, ctx)
-
     return {
         "providers": rows,
         "model": ctx.current_model,
@@ -232,19 +230,6 @@ def build_models_payload(
 
 def _verxio_hosted() -> bool:
     return os.getenv("VERXIO_HOSTED", "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _filter_verxio_hosted_providers(rows: list[dict], ctx: ConfigContext) -> list[dict]:
-    """Verxio Hosted injects one provider via the inference bridge — keep the picker scoped."""
-    if not _verxio_hosted():
-        return rows
-
-    provider = (ctx.current_provider or "").strip().lower()
-    if not provider:
-        return rows
-
-    matched = [row for row in rows if str(row.get("slug") or "").strip().lower() == provider]
-    return matched if matched else rows
 
 
 def _apply_capabilities(rows: list[dict]) -> None:

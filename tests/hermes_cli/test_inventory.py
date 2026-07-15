@@ -729,7 +729,7 @@ def test_build_models_payload_no_max_models_returns_full_list():
     assert len(kilo_row["models"]) == 100
 
 
-def test_build_models_payload_verxio_hosted_scopes_to_current_provider(monkeypatch):
+def test_build_models_payload_verxio_hosted_keeps_authenticated_providers(monkeypatch):
     rows = [
         {
             "slug": "alibaba",
@@ -761,7 +761,7 @@ def test_build_models_payload_verxio_hosted_scopes_to_current_provider(monkeypat
     with _list_auth_returning(rows):
         payload = build_models_payload(ctx, include_unconfigured=True)
 
-    assert [row["slug"] for row in payload["providers"]] == ["gemini"]
+    assert [row["slug"] for row in payload["providers"]] == ["alibaba", "gemini"]
 
 
 # ─── refresh flag (cache-bust) ─────────────────────────────────────────
@@ -799,4 +799,3 @@ def test_list_authenticated_providers_refresh_busts_cache():
         assert clear.call_count == 0
         model_switch.list_authenticated_providers(refresh=True)
         assert clear.call_count == 1
-
