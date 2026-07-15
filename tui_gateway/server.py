@@ -4777,10 +4777,14 @@ def _(rid, params: dict) -> dict:
         try:
             # Pass the profile's db so the agent persists turns to the right
             # state.db; home override is active here so config/skills/model
-            # resolve to the profile too. Runtime identity is restored from the
-            # stored session row so switching chats does not inherit whatever
-            # global model another chat last selected.
-            stored_runtime_overrides = _stored_session_runtime_overrides(found)
+            # resolve to the profile too. Desktop/Web can ask to ignore stored
+            # model/provider metadata so older sessions follow the currently
+            # selected profile model instead of failing on stale credentials.
+            stored_runtime_overrides = (
+                {}
+                if is_truthy_value(params.get("use_current_model", False))
+                else _stored_session_runtime_overrides(found)
+            )
             agent = _make_agent(
                 sid,
                 target,
