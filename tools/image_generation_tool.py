@@ -24,8 +24,11 @@ import json
 import logging
 import os
 import datetime
+import shutil
 import threading
+import urllib.request
 import uuid
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 # fal_client is imported lazily — see _load_fal_client(). Pulling it
@@ -808,6 +811,85 @@ def _force_artifact_sync(env: Any) -> None:
         logger.warning("Could not force-sync generated image artifact: %s", exc)
 
 
+def _verxio_artifacts_dir() -> Path | None:
+    """Return the Verxio artifact directory when this runtime exposes one."""
+    explicit = os.getenv("VERXIO_ARTIFACTS_DIR", "").strip()
+    if explicit:
+        path = Path(explicit).expanduser()
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    workspace_artifacts = Path("/workspace/artifacts")
+    if workspace_artifacts.exists() and workspace_artifacts.is_dir():
+        return workspace_artifacts
+
+    return None
+
+
+def _artifact_extension(value: str, content_type: str | None = None) -> str:
+    if content_type:
+        mapped = {
+            "image/png": "png",
+            "image/jpeg": "jpg",
+            "image/jpg": "jpg",
+            "image/webp": "webp",
+            "image/gif": "gif",
+        }.get(content_type.split(";", 1)[0].strip().lower())
+        if mapped:
+            return mapped
+
+    lower = value.split("?", 1)[0].lower()
+    for ext in ("png", "jpg", "jpeg", "webp", "gif"):
+        if lower.endswith(f".{ext}"):
+            return "jpg" if ext == "jpeg" else ext
+
+    return "png"
+
+
+def _artifact_filename(payload: dict[str, Any], source: str, extension: str) -> str:
+    raw_prompt = str(payload.get("prompt") or "generated image").lower()
+    slug = "".join(ch if ch.isalnum() else "_" for ch in raw_prompt).strip("_")
+    slug = "_".join(part for part in slug.split("_") if part)[:48] or "generated_image"
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    short = uuid.uuid4().hex[:8]
+    return f"{slug}_{ts}_{short}.{extension}"
+
+
+def _materialize_verxio_artifact(payload: dict[str, Any]) -> str | None:
+    """Copy/download a generated image into `/workspace/artifacts` for Verxio."""
+    artifact_dir = _verxio_artifacts_dir()
+    if artifact_dir is None:
+        return None
+
+    image = payload.get("image")
+    if not isinstance(image, str) or not image.strip():
+        return None
+
+    source = image.strip()
+    if source.startswith(("http://", "https://")):
+        with urllib.request.urlopen(source, timeout=60) as response:  # noqa: S310 - user-configured image backend URL
+            content_type = response.headers.get("Content-Type")
+            extension = _artifact_extension(source, content_type)
+            target = artifact_dir / _artifact_filename(payload, source, extension)
+            with target.open("wb") as fh:
+                shutil.copyfileobj(response, fh)
+    elif _looks_like_absolute_file_path(source):
+        source_path = Path(source).expanduser()
+        if not source_path.exists() or not source_path.is_file():
+            return None
+        extension = _artifact_extension(source_path.name)
+        target = artifact_dir / _artifact_filename(payload, source, extension)
+        if source_path.resolve() != target.resolve():
+            shutil.copy2(source_path, target)
+    else:
+        return None
+
+    if not target.exists() or target.stat().st_size <= 0:
+        return None
+
+    return str(target)
+
+
 def _postprocess_image_generate_result(raw: str, task_id: str | None = None) -> str:
     """Annotate successful local image results with backend-visible paths.
 
@@ -824,13 +906,34 @@ def _postprocess_image_generate_result(raw: str, task_id: str | None = None) -> 
         return raw
 
     image = payload.get("image")
-    if not isinstance(image, str) or not _looks_like_absolute_file_path(image):
+    if not isinstance(image, str) or not image.strip():
+        payload.update({
+            "success": False,
+            "image": None,
+            "error": "Image provider reported success without returning an image.",
+            "error_type": "empty_image_result",
+        })
+        return json.dumps(payload, ensure_ascii=False)
+
+    try:
+        artifact_path = _materialize_verxio_artifact(payload)
+    except Exception as exc:  # noqa: BLE001 - generation succeeded; preserve result with diagnostics
+        logger.warning("Could not materialize generated image artifact: %s", exc)
+        artifact_path = None
+
+    if artifact_path:
+        payload.setdefault("original_image", image)
+        payload["image"] = artifact_path
+        payload["host_image"] = artifact_path
+        image = artifact_path
+
+    if not _looks_like_absolute_file_path(image):
         return raw
 
     env = _active_terminal_env(task_id)
     agent_path = _agent_visible_cache_path(image, env)
     if not agent_path or agent_path == image:
-        return raw
+        return json.dumps(payload, ensure_ascii=False) if artifact_path else raw
 
     if env is not None:
         _force_artifact_sync(env)

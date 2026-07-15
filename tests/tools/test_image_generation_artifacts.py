@@ -1,4 +1,5 @@
 import json
+from io import BytesIO
 from types import SimpleNamespace
 
 
@@ -78,14 +79,43 @@ def test_postprocess_maps_ssh_cache_path_without_active_env(monkeypatch, tmp_pat
     assert result["agent_visible_image"] == "~/.hermes/cache/images/first-call.png"
 
 
-def test_postprocess_leaves_remote_image_urls_unchanged(monkeypatch):
+def test_postprocess_materializes_remote_image_url_when_artifact_dir_configured(monkeypatch, tmp_path):
     from tools import image_generation_tool
 
+    artifact_dir = tmp_path / "artifacts"
+    image_bytes = b"\x89PNG\r\n\x1a\nfake"
+
+    class FakeResponse(BytesIO):
+        headers = {"Content-Type": "image/png"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
     monkeypatch.setattr(image_generation_tool, "_active_terminal_env", lambda task_id: None)
+    monkeypatch.setenv("VERXIO_ARTIFACTS_DIR", str(artifact_dir))
+    monkeypatch.setattr(image_generation_tool.urllib.request, "urlopen", lambda *args, **kwargs: FakeResponse(image_bytes))
 
-    raw = json.dumps({"success": True, "image": "https://example.com/image.png"})
+    raw = json.dumps({"success": True, "image": "https://example.com/image.png", "prompt": "A pool villa"})
+    result = json.loads(image_generation_tool._postprocess_image_generate_result(raw))
 
-    assert image_generation_tool._postprocess_image_generate_result(raw) == raw
+    assert result["image"].startswith(str(artifact_dir))
+    assert result["host_image"] == result["image"]
+    assert result["original_image"] == "https://example.com/image.png"
+    assert result["image"].endswith(".png")
+    assert (artifact_dir / result["image"].split("/")[-1]).read_bytes() == image_bytes
+
+
+def test_postprocess_marks_success_without_image_as_failure():
+    from tools import image_generation_tool
+
+    raw = json.dumps({"success": True, "image": "", "prompt": "A pool villa"})
+    result = json.loads(image_generation_tool._postprocess_image_generate_result(raw))
+
+    assert result["success"] is False
+    assert result["error_type"] == "empty_image_result"
 
 
 def test_handle_image_generate_postprocesses_plugin_result(monkeypatch, tmp_path):
