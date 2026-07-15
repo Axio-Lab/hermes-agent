@@ -4841,10 +4841,14 @@ def _(rid, params: dict) -> dict:
             # resolve to the profile too. Desktop/Web can ask to ignore stored
             # model/provider metadata so older sessions follow the currently
             # selected profile model instead of failing on stale credentials.
+            restore_stored_runtime = is_truthy_value(
+                params.get("restore_stored_runtime", False)
+            )
+            use_current_model = is_truthy_value(
+                params.get("use_current_model", not restore_stored_runtime)
+            )
             stored_runtime_overrides = (
-                {}
-                if is_truthy_value(params.get("use_current_model", False))
-                else _stored_session_runtime_overrides(found)
+                {} if use_current_model else _stored_session_runtime_overrides(found)
             )
             agent = _make_agent(
                 sid,

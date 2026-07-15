@@ -452,6 +452,106 @@ def test_session_resume_use_current_model_ignores_stale_stored_provider(server, 
     assert "provider_override" not in make_agent_kwargs
 
 
+def test_session_resume_defaults_to_current_model(server, monkeypatch):
+    target = "20260715_010101_default_current"
+    make_agent_kwargs: dict = {}
+
+    class _DB:
+        def get_session(self, _sid):
+            return {
+                "id": target,
+                "model": "qwen-stale",
+                "billing_provider": "alibaba",
+                "model_config": json.dumps(
+                    {"model": "qwen-stale", "provider": "alibaba"}
+                ),
+            }
+
+        def get_session_by_title(self, _title):
+            return None
+
+        def reopen_session(self, _sid):
+            return None
+
+        def get_messages_as_conversation(self, _sid, include_ancestors=False):
+            return [{"role": "user", "content": "hello"}]
+
+    def make_agent(_sid, _key, **kwargs):
+        make_agent_kwargs.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(server, "_get_db", lambda: _DB())
+    monkeypatch.setattr(server, "_make_agent", make_agent)
+    monkeypatch.setattr(server, "_init_session", lambda sid, key, agent, history, cols=80, **_kwargs: None)
+    monkeypatch.setattr(server, "_session_info", lambda _agent, _session=None: {"model": "current/model"})
+
+    resp = server.handle_request(
+        {
+            "id": "r1",
+            "method": "session.resume",
+            "params": {
+                "session_id": target,
+                "cols": 100,
+            },
+        }
+    )
+
+    assert "error" not in resp
+    assert make_agent_kwargs.get("session_id") == target
+    assert "model_override" not in make_agent_kwargs
+    assert "provider_override" not in make_agent_kwargs
+
+
+def test_session_resume_can_restore_stored_runtime(server, monkeypatch):
+    target = "20260715_010101_restore_stored"
+    make_agent_kwargs: dict = {}
+
+    class _DB:
+        def get_session(self, _sid):
+            return {
+                "id": target,
+                "model": "qwen-stored",
+                "billing_provider": "alibaba",
+                "model_config": json.dumps(
+                    {"model": "qwen-stored", "provider": "alibaba"}
+                ),
+            }
+
+        def get_session_by_title(self, _title):
+            return None
+
+        def reopen_session(self, _sid):
+            return None
+
+        def get_messages_as_conversation(self, _sid, include_ancestors=False):
+            return [{"role": "user", "content": "hello"}]
+
+    def make_agent(_sid, _key, **kwargs):
+        make_agent_kwargs.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(server, "_get_db", lambda: _DB())
+    monkeypatch.setattr(server, "_make_agent", make_agent)
+    monkeypatch.setattr(server, "_init_session", lambda sid, key, agent, history, cols=80, **_kwargs: None)
+    monkeypatch.setattr(server, "_session_info", lambda _agent, _session=None: {"model": "qwen-stored"})
+
+    resp = server.handle_request(
+        {
+            "id": "r1",
+            "method": "session.resume",
+            "params": {
+                "session_id": target,
+                "restore_stored_runtime": True,
+            },
+        }
+    )
+
+    assert "error" not in resp
+    assert make_agent_kwargs["model_override"]["model"] == "qwen-stored"
+    assert make_agent_kwargs["model_override"]["provider"] == "alibaba"
+    assert make_agent_kwargs["provider_override"] == "alibaba"
+
+
 def test_session_resume_lazy_registers_watch_session_without_agent(server, monkeypatch):
     """``lazy: true`` (subagent watch windows) must register the live session
     — keyed for the child mirror, on this transport — WITHOUT building an
