@@ -1178,6 +1178,32 @@ def test_slash_exec_plugin_handler_error_returns_output(server):
     assert worker.calls == []
 
 
+def test_slash_exec_version_uses_verxio_branding(server):
+    sid = "test-session"
+
+    class Worker:
+        def __init__(self):
+            self.calls = []
+
+        def run(self, cmd):
+            self.calls.append(cmd)
+            return "Hermes Agent v1.2.3\nPython: 3.11"
+
+    worker = Worker()
+    server._sessions[sid] = {"session_key": sid, "agent": None, "slash_worker": worker}
+
+    resp = server.handle_request({
+        "id": "r-version-branding",
+        "method": "slash.exec",
+        "params": {"command": "version", "session_id": sid},
+    })
+
+    assert "error" not in resp
+    assert "Verxio Agent v1.2.3" in resp["result"]["output"]
+    assert "Hermes Agent" not in resp["result"]["output"]
+    assert worker.calls == ["version"]
+
+
 @pytest.mark.parametrize("cmd", ["retry", "queue hello", "q hello", "steer fix the test", "plan"])
 def test_slash_exec_routes_pending_input_commands_to_dispatch(server, cmd):
     """slash.exec must route _pending_input commands to command.dispatch
@@ -1218,6 +1244,120 @@ def test_slash_exec_routes_pending_input_commands_to_dispatch(server, cmd):
     # Internal routing must yield the same payload as command.dispatch.
     assert routed.get("result") == direct.get("result")
     assert routed.get("error") == direct.get("error")
+
+
+def test_command_dispatch_plan_mode_toggle(server):
+    sid = "test-session"
+    server._sessions[sid] = {"session_key": sid, "agent": None}
+
+    enabled = server.handle_request({
+        "id": "r-plan-on",
+        "method": "command.dispatch",
+        "params": {"name": "plan", "arg": "on", "session_id": sid},
+    })
+    assert "error" not in enabled
+    assert server._sessions[sid]["workflow_mode"] == "plan"
+    assert "Plan mode enabled" in enabled["result"]["output"]
+
+    status = server.handle_request({
+        "id": "r-plan-status",
+        "method": "command.dispatch",
+        "params": {"name": "plan", "arg": "status", "session_id": sid},
+    })
+    assert "error" not in status
+    assert server._sessions[sid]["workflow_mode"] == "plan"
+    assert "Plan mode enabled" in status["result"]["output"]
+
+    disabled = server.handle_request({
+        "id": "r-plan-off",
+        "method": "command.dispatch",
+        "params": {"name": "plan", "arg": "off", "session_id": sid},
+    })
+    assert "error" not in disabled
+    assert server._sessions[sid]["workflow_mode"] == "execute"
+    assert "Plan mode disabled" in disabled["result"]["output"]
+
+
+def test_plan_mode_prompt_uses_plan_skill(server):
+    session = {"session_key": "stored-session", "workflow_mode": "plan"}
+
+    with patch(
+        "agent.skill_commands.build_skill_invocation_message",
+        return_value="plan skill invocation",
+    ) as build:
+        text = server._plan_mode_prompt(session, "implement the next step")
+
+    assert text == "plan skill invocation"
+    build.assert_called_once_with(
+        "/plan",
+        "implement the next step",
+        task_id="stored-session",
+    )
+
+
+def test_all_curated_desktop_slash_commands_route(server):
+    """Every command in the desktop slash palette must have a backend route."""
+    sid = "test-session"
+
+    class Worker:
+        def __init__(self):
+            self.calls = []
+
+        def run(self, cmd):
+            self.calls.append(cmd)
+            return f"worker:{cmd}"
+
+    commands = {
+        "agents": "agents",
+        "background": "background write a summary",
+        "branch": "branch",
+        "compress": "compress",
+        "debug": "debug",
+        "goal": "goal status",
+        "help": "help",
+        "new": "new",
+        "plan": "plan status",
+        "profile": "profile",
+        "queue": "queue follow up",
+        "resume": "resume",
+        "retry": "retry",
+        "rollback": "rollback",
+        "skin": "skin",
+        "status": "status",
+        "steer": "steer adjust the current run",
+        "stop": "stop",
+        "title": "title",
+        "undo": "undo",
+        "usage": "usage",
+        "version": "version",
+        "yolo": "yolo",
+    }
+    routed = {}
+
+    for name, command in commands.items():
+        worker = Worker()
+        session = {
+            "session_key": sid,
+            "agent": None,
+            "history": [{"role": "user", "content": "previous prompt"}],
+            "history_lock": threading.Lock(),
+            "slash_worker": worker,
+        }
+        server._sessions[sid] = session
+
+        resp = server.handle_request({
+            "id": f"r-{name}",
+            "method": "slash.exec",
+            "params": {"command": command, "session_id": sid},
+        })
+        routed[name] = resp
+
+        assert "error" not in resp, f"{name}: {resp}"
+        assert resp.get("result"), f"{name}: empty result"
+
+    worker_backed = set(commands) - {"goal", "plan", "queue", "retry", "steer", "undo"}
+    for name in worker_backed:
+        assert routed[name]["result"]["output"], name
 
 
 def test_command_dispatch_queue_sends_message(server):

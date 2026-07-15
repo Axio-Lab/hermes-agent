@@ -2712,6 +2712,59 @@ def _current_profile_name() -> str:
 # v2: adds the file.attach RPC (remote-gateway non-image file upload).
 DESKTOP_BACKEND_CONTRACT = 2
 
+_WORKFLOW_EXECUTE = "execute"
+_WORKFLOW_PLAN = "plan"
+
+
+def _session_workflow_mode(session: dict | None) -> str:
+    mode = str((session or {}).get("workflow_mode") or _WORKFLOW_EXECUTE).strip().lower()
+    return _WORKFLOW_PLAN if mode == _WORKFLOW_PLAN else _WORKFLOW_EXECUTE
+
+
+def _set_session_workflow_mode(session: dict, mode: str) -> str:
+    workflow_mode = _WORKFLOW_PLAN if str(mode).lower() == _WORKFLOW_PLAN else _WORKFLOW_EXECUTE
+    session["workflow_mode"] = workflow_mode
+    return workflow_mode
+
+
+def _format_plan_mode_output(session: dict) -> str:
+    mode = _session_workflow_mode(session)
+    if mode == _WORKFLOW_PLAN:
+        return "Plan mode enabled. Normal prompts will ask the agent to plan before executing."
+    return "Plan mode disabled. Normal prompts will execute normally."
+
+
+def _plan_mode_prompt(session: dict | None, text: str) -> str:
+    if _session_workflow_mode(session) != _WORKFLOW_PLAN:
+        return text
+    try:
+        from agent.skill_commands import build_skill_invocation_message
+
+        message = build_skill_invocation_message(
+            "/plan",
+            text,
+            task_id=str((session or {}).get("session_key") or ""),
+        )
+        if message:
+            return message
+    except Exception:
+        logger.debug("failed to build /plan skill invocation", exc_info=True)
+    return (
+        "Plan mode is active. Create a concise execution plan for the request below. "
+        "Do not modify files or run mutating commands until the user approves the plan.\n\n"
+        f"Request:\n{text}"
+    )
+
+
+def _verxio_brand_slash_output(command_base: str, output: str) -> str:
+    if command_base != "version":
+        return output
+    return (
+        str(output or "")
+        .replace("Hermes Agent", "Verxio Agent")
+        .replace("Hermes agent", "Verxio agent")
+    )
+
 
 def _session_info(agent, session: dict | None = None) -> dict:
     if session is None:
@@ -2733,6 +2786,7 @@ def _session_info(agent, session: dict | None = None) -> dict:
     ):
         reasoning_effort = str(reasoning_config.get("effort", "") or "")
     service_tier = getattr(agent, "service_tier", None) or ""
+    workflow_mode = _session_workflow_mode(session)
     # Effective approval-bypass state — the same three sources that
     # check_all_command_guards() ORs together: persistent config
     # (approvals.mode=off), the process-scoped --yolo env, and the
@@ -2774,6 +2828,8 @@ def _session_info(agent, session: dict | None = None) -> dict:
         "update_command": "",
         "usage": _get_usage(agent),
         "profile_name": _current_profile_name(),
+        "workflow_mode": workflow_mode,
+        "plan_mode": workflow_mode == _WORKFLOW_PLAN,
     }
     try:
         from hermes_cli import __version__, __release_date__
@@ -3907,6 +3963,7 @@ def _init_session(
             "tool_progress_mode": _load_tool_progress_mode(),
             "edit_snapshots": {},
             "tool_started_at": {},
+            "workflow_mode": _WORKFLOW_EXECUTE,
             # Per-session model override set by an in-session /model switch.
             # Honored on rebuild (/new, resume) so a switch in THIS session
             # never leaks into siblings via process-global env vars.
@@ -4396,6 +4453,7 @@ def _(rid, params: dict) -> dict:
             "tool_progress_mode": _load_tool_progress_mode(),
             "tool_started_at": {},
             "transport": current_transport() or _stdio_transport,
+            "workflow_mode": _WORKFLOW_EXECUTE,
         }
         _register_session_cwd(_sessions[sid])
     # NOTE: we intentionally do NOT persist a DB row here. Every TUI/desktop
@@ -4724,6 +4782,7 @@ def _(rid, params: dict) -> dict:
                     "tool_progress_mode": _load_tool_progress_mode(),
                     "tool_started_at": {},
                     "transport": current_transport() or _stdio_transport,
+                    "workflow_mode": _WORKFLOW_EXECUTE,
                 }
                 _register_session_cwd(_sessions[sid])
         return _ok(
@@ -4742,6 +4801,8 @@ def _(rid, params: dict) -> dict:
                     "lazy": True,
                     "desktop_contract": DESKTOP_BACKEND_CONTRACT,
                     "profile_name": _current_profile_name(),
+                    "workflow_mode": _WORKFLOW_EXECUTE,
+                    "plan_mode": False,
                 },
                 "inflight": None,
                 "running": child_running,
@@ -4987,6 +5048,8 @@ def _fallback_session_info(session: dict) -> dict:
         "model": _resolve_model(),
         "skills": {},
         "tools": {},
+        "workflow_mode": _session_workflow_mode(session),
+        "plan_mode": _session_workflow_mode(session) == _WORKFLOW_PLAN,
     }
 
 
@@ -6366,9 +6429,10 @@ def _(rid, params: dict) -> dict:
                     db.replace_messages(session["session_key"], truncated)
                 except Exception as exc:
                     print(f"[tui_gateway] prompt.submit: replace_messages failed: {exc}", file=sys.stderr)
+        effective_text = _plan_mode_prompt(session, text)
         session["running"] = True
         session["last_active"] = time.time()
-        _start_inflight_turn(session, text)
+        _start_inflight_turn(session, effective_text)
 
     # Persist the DB row lazily, now that the user has actually sent a message.
     _ensure_session_db_row(session)
@@ -6390,7 +6454,7 @@ def _(rid, params: dict) -> dict:
                 session["running"] = False
                 _clear_inflight_turn(session)
             return
-        _run_prompt_submit(rid, sid, session, text)
+        _run_prompt_submit(rid, sid, session, effective_text)
 
     threading.Thread(target=run_after_agent_ready, daemon=True).start()
     return _ok(rid, {"status": "streaming"})
@@ -9048,6 +9112,34 @@ def _(rid, params: dict) -> dict:
     except Exception:
         pass
 
+    if name == "plan":
+        plan_arg = str(arg or "").strip().lower()
+        if plan_arg in {"", "on", "off", "toggle", "status"}:
+            if not session:
+                return _err(rid, 4001, "no active session for /plan")
+            current = _session_workflow_mode(session)
+            if plan_arg == "status":
+                next_mode = current
+            elif plan_arg == "off":
+                next_mode = _WORKFLOW_EXECUTE
+            elif plan_arg == "on":
+                next_mode = _WORKFLOW_PLAN
+            else:
+                next_mode = (
+                    _WORKFLOW_EXECUTE
+                    if current == _WORKFLOW_PLAN
+                    else _WORKFLOW_PLAN
+                )
+            _set_session_workflow_mode(session, next_mode)
+            agent = session.get("agent")
+            if agent is not None:
+                _emit(
+                    "session.info",
+                    str(params.get("session_id") or ""),
+                    _session_info(agent, session),
+                )
+            return _ok(rid, {"type": "exec", "output": _format_plan_mode_output(session)})
+
     try:
         from agent.skill_commands import (
             scan_skill_commands,
@@ -10182,6 +10274,7 @@ def _(rid, params: dict) -> dict:
 
     try:
         output = worker.run(cmd)
+        output = _verxio_brand_slash_output(_cmd_base, output)
         warning = _mirror_slash_side_effects(params.get("session_id", ""), session, cmd)
         payload = {"output": output or "(no output)"}
         if warning:
