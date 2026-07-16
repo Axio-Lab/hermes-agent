@@ -6458,8 +6458,15 @@ def reload_env() -> int:
         if os.environ.get(key) != value:
             os.environ[key] = value
             count += 1
-    # Remove known Hermes vars that are no longer in .env
+    preserve_hosted_env = os.environ.get("VERXIO_HOSTED") == "1"
+    hosted_env_keys = {"DASHSCOPE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"}
+    # Remove known Hermes vars that are no longer in .env. Verxio-hosted
+    # runtimes inject hosted model credentials as container env rather than
+    # persisting them to .env, so a Tools & Keys reload must not delete them
+    # from the live gateway process.
     for key in known_keys:
+        if preserve_hosted_env and key in hosted_env_keys:
+            continue
         if key not in env_vars and key in os.environ:
             del os.environ[key]
             count += 1

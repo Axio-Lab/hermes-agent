@@ -165,6 +165,19 @@ class TestReloadEnv:
             assert os.environ.get("MY_CUSTOM_UNRELATED_VAR") == "keep_me"
         os.environ.pop("MY_CUSTOM_UNRELATED_VAR", None)
 
+    def test_preserves_verxio_hosted_model_env(self, tmp_path):
+        """Verxio injects hosted model keys as container env, not .env."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("")
+        with patch.dict(reload_env.__globals__, {"get_env_path": lambda: env_file}):
+            os.environ["VERXIO_HOSTED"] = "1"
+            os.environ["DASHSCOPE_API_KEY"] = "hosted-qwen-key"
+            count = reload_env()
+            assert os.environ.get("DASHSCOPE_API_KEY") == "hosted-qwen-key"
+            assert count == 0
+        os.environ.pop("VERXIO_HOSTED", None)
+        os.environ.pop("DASHSCOPE_API_KEY", None)
+
 
 # ---------------------------------------------------------------------------
 # redact_key tests
