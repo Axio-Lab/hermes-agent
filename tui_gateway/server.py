@@ -3414,6 +3414,31 @@ def _prompt_text(value) -> str:
     return str(value).strip()
 
 
+def refresh_live_session_system_prompts() -> int:
+    """Re-read ``agent.system_prompt`` from config.yaml into live session agents.
+
+    Verxio rewrites the Connected Apps block when Composio connections change.
+    MCP tool reload alone left ``ephemeral_system_prompt`` stale, so open chats
+    kept saying apps were disconnected after Skills → Connections succeeded.
+    """
+    cfg = _load_cfg()
+    agent_cfg = cfg.get("agent") or {}
+    system_prompt = _prompt_text(agent_cfg.get("system_prompt", ""))
+    updated = 0
+    for _sid, session in list(_sessions.items()):
+        if not isinstance(session, dict):
+            continue
+        # Leave explicit personality overlays alone; those replace the prompt.
+        if str(session.get("personality") or "").strip():
+            continue
+        agent = session.get("agent")
+        if agent is None:
+            continue
+        agent.ephemeral_system_prompt = system_prompt or None
+        updated += 1
+    return updated
+
+
 def _apply_personality_to_session(
     sid: str, session: dict, new_prompt: str, personality: str = ""
 ) -> tuple[bool, dict | None]:

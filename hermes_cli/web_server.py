@@ -9086,6 +9086,7 @@ async def reload_mcp_servers(profile: Optional[str] = None):
             shutdown_mcp_servers()
             tools = discover_mcp_tools()
 
+            tui_server = None
             try:
                 from tui_gateway import server as tui_server
 
@@ -9099,7 +9100,7 @@ async def reload_mcp_servers(profile: Optional[str] = None):
             refresh_failures = 0
             for sid, session in live_sessions:
                 agent = session.get("agent") if isinstance(session, dict) else None
-                if agent is None:
+                if agent is None or tui_server is None:
                     continue
                 try:
                     refresh_agent_mcp_tools(
@@ -9123,12 +9124,24 @@ async def reload_mcp_servers(profile: Optional[str] = None):
                         sid,
                         exc_info=True,
                     )
+            prompts_refreshed = 0
+            if tui_server is not None:
+                try:
+                    prompts_refreshed = int(
+                        tui_server.refresh_live_session_system_prompts()
+                    )
+                except Exception:
+                    _log.warning(
+                        "Failed to refresh live session system prompts after MCP reload",
+                        exc_info=True,
+                    )
         return {
             "ok": True,
             "toolCount": len(tools),
             "message": f"Reloaded MCP servers ({len(tools)} tool(s)).",
             "refreshedSessions": refreshed_sessions,
             "refreshFailures": refresh_failures,
+            "promptsRefreshed": prompts_refreshed,
         }
     except Exception as exc:
         _log.exception("POST /api/mcp/reload failed")

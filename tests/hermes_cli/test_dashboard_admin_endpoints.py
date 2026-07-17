@@ -128,6 +128,11 @@ class TestMcpEndpoints:
             return {"mcp_composio_GOOGLESHEETS_CREATE_SPREADSHEET"}
 
         monkeypatch.setattr(mcp_tool, "refresh_agent_mcp_tools", fake_refresh)
+        monkeypatch.setattr(
+            tui_server,
+            "refresh_live_session_system_prompts",
+            lambda: calls.append("prompts") or 1,
+        )
 
         try:
             response = self.client.post("/api/mcp/reload")
@@ -140,11 +145,13 @@ class TestMcpEndpoints:
         assert body["toolCount"] == 1
         assert body["refreshedSessions"] == 1
         assert body["refreshFailures"] == 0
+        assert body["promptsRefreshed"] == 1
         assert calls[0] == "shutdown"
         assert calls[1][0] == "refresh"
         assert calls[1][1] is agent
         assert calls[1][2] == ["composio"]
         assert calls[1][3] is True
+        assert calls[2] == "prompts"
         assert emitted == [("session.info", "live-composio", {"tools": 1})]
 
     def test_catalog_lists_entries(self):
