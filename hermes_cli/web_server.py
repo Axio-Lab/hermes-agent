@@ -758,6 +758,15 @@ class MessagingPlatformUpdate(BaseModel):
     profile: Optional[str] = None
 
 
+class MessagingConnectionUpdate(BaseModel):
+    label: Optional[str] = None
+    enabled: Optional[bool] = None
+    env: Dict[str, str] = {}
+    clear_env: List[str] = []
+    identity: Optional[str] = None
+    profile: Optional[str] = None
+
+
 class TelegramOnboardingStart(BaseModel):
     bot_name: Optional[str] = None
 
@@ -5381,6 +5390,8 @@ def _messaging_platform_payload(
     elif "Hermes" in description:
         description = description.replace("Hermes", "Verxio")
 
+    connections = _messaging_connections_payload(platform_id, entry, env_on_disk, env_vars)
+
     return {
         "id": platform_id,
         "name": entry["name"],
@@ -5399,23 +5410,249 @@ def _messaging_platform_payload(
         ),
         "home_channel": home_channel,
         "env_vars": env_vars,
+        "connections": connections,
+        "supports_multiple_connections": platform_id
+        in _multi_account_platform_ids(),
     }
+
+
+def _multi_account_platform_ids() -> frozenset[str]:
+    try:
+        from gateway.connections import MULTI_ACCOUNT_PLATFORMS
+
+        return MULTI_ACCOUNT_PLATFORMS
+    except Exception:
+        return frozenset(
+            {"slack", "telegram", "discord", "whatsapp", "whatsapp_cloud"}
+        )
+
+
+def _messaging_connections_payload(
+    platform_id: str,
+    entry: dict[str, Any],
+    env_on_disk: dict[str, str],
+    platform_env_vars: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build connection rows for multi-account platforms (or a synthetic default)."""
+    try:
+        from gateway.connections import (
+            DEFAULT_CONNECTION_ID,
+            PRIMARY_CREDENTIAL_ENV,
+            ConnectionRecord,
+            connection_credential_keys,
+            connection_env_key,
+            ensure_default_connection,
+            load_connections_for_platform,
+            split_csv_tokens,
+        )
+    except Exception:
+        return []
+
+    if platform_id not in _multi_account_platform_ids():
+        return []
+
+    primary = PRIMARY_CREDENTIAL_ENV.get(platform_id, "")
+    catalog_keys = [str(v) for v in entry.get("env_vars") or ()]
+    cred_keys = connection_credential_keys(platform_id, catalog_keys)
+
+    records = load_connections_for_platform(platform_id)
+
+    # Slack: expand comma-separated bot tokens into workspace rows when metadata is thin.
+    if platform_id == "slack":
+        records = _slack_connection_records(records, env_on_disk)
+
+    legacy_set = bool((env_on_disk.get(primary) or "").strip()) if primary else False
+    if platform_id == "whatsapp":
+        legacy_set = _whatsapp_is_paired()
+
+    records = ensure_default_connection(
+        platform_id,
+        records,
+        has_legacy_credentials=legacy_set,
+        label="Default",
+    )
+
+    # Persist migrated default so subsequent GETs stay stable.
+    try:
+        from gateway.connections import save_connections_for_platform
+
+        if not load_connections_for_platform(platform_id) and records:
+            save_connections_for_platform(platform_id, records)
+    except Exception:
+        _log.debug("Could not persist migrated messaging connections", exc_info=True)
+
+    out: list[dict[str, Any]] = []
+    for record in records:
+        conn_env_vars = []
+        for field in platform_env_vars:
+            key = field["key"]
+            # Per-connection credentials only; app-level keys stay on the platform form.
+            if key not in cred_keys:
+                continue
+            storage_key = connection_env_key(key, record.id)
+            value = env_on_disk.get(storage_key) or ""
+            # Default Slack/Telegram/Discord: fall back to legacy unscoped key.
+            if not value and record.id == DEFAULT_CONNECTION_ID:
+                value = env_on_disk.get(key) or ""
+            # Slack multi-token CSV: pick the token for this connection index.
+            if (
+                not value
+                and platform_id == "slack"
+                and key == "SLACK_BOT_TOKEN"
+            ):
+                tokens = split_csv_tokens(env_on_disk.get("SLACK_BOT_TOKEN") or "")
+                meta_idx = record.meta.get("token_index")
+                if isinstance(meta_idx, int) and 0 <= meta_idx < len(tokens):
+                    value = tokens[meta_idx]
+                elif record.id == DEFAULT_CONNECTION_ID and tokens:
+                    value = tokens[0]
+            info = OPTIONAL_ENV_VARS.get(key, {})
+            is_password = bool(info.get("password")) or "TOKEN" in key or "SECRET" in key or "PASSWORD" in key
+            field_payload = {
+                "key": key,
+                "required": key in (entry.get("required_env") or ()),
+                "is_set": bool(value.strip()),
+                "redacted_value": redact_key(value) if value and is_password else (value or None),
+                "description": info.get("description") or field.get("description") or "",
+                "prompt": info.get("prompt") or field.get("prompt") or key,
+                "url": info.get("url") or field.get("url"),
+                "is_password": is_password,
+                "advanced": bool(field.get("advanced")),
+            }
+            if not is_password:
+                field_payload["current_value"] = value or None
+            conn_env_vars.append(field_payload)
+
+        configured = any(f["is_set"] for f in conn_env_vars if f["required"]) or any(
+            f["is_set"] for f in conn_env_vars
+        )
+        if platform_id == "whatsapp":
+            configured = _whatsapp_is_paired(record.id)
+
+        out.append(
+            {
+                "id": record.id,
+                "label": record.label or ("Default" if record.id == DEFAULT_CONNECTION_ID else record.id),
+                "enabled": bool(record.enabled),
+                "identity": record.identity or "",
+                "configured": bool(configured),
+                "is_default": record.id == DEFAULT_CONNECTION_ID,
+                "state": "connected" if configured and record.enabled else (
+                    "disabled" if not record.enabled else "not_configured"
+                ),
+                "env_vars": conn_env_vars,
+                "meta": dict(record.meta or {}),
+            }
+        )
+
+    return out
+
+
+def _slack_connection_records(
+    records: list[Any],
+    env_on_disk: dict[str, str],
+) -> list[Any]:
+    """Synthesize Slack workspace connections from CSV tokens + slack_tokens.json."""
+    from gateway.connections import (
+        DEFAULT_CONNECTION_ID,
+        ConnectionRecord,
+        split_csv_tokens,
+    )
+
+    tokens = split_csv_tokens(env_on_disk.get("SLACK_BOT_TOKEN") or "")
+    team_by_token: dict[str, dict[str, Any]] = {}
+    try:
+        tokens_path = get_hermes_home() / "slack_tokens.json"
+        if tokens_path.is_file():
+            raw = json.loads(tokens_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                for team_id, info in raw.items():
+                    if not isinstance(info, dict):
+                        continue
+                    tok = str(info.get("bot_token") or info.get("token") or "").strip()
+                    if tok:
+                        team_by_token[tok] = {
+                            "team_id": str(team_id),
+                            "team_name": str(info.get("team_name") or info.get("name") or team_id),
+                        }
+    except Exception:
+        _log.debug("Could not read slack_tokens.json", exc_info=True)
+
+    if not tokens:
+        return list(records)
+
+    # Prefer existing metadata when present; otherwise expand from CSV.
+    if len(records) >= len(tokens) and all(
+        isinstance(r, ConnectionRecord) for r in records
+    ):
+        return list(records)
+
+    expanded: list[ConnectionRecord] = []
+    for index, token in enumerate(tokens):
+        team = team_by_token.get(token, {})
+        conn_id = DEFAULT_CONNECTION_ID if index == 0 else f"slack_{index}"
+        # Keep stable ids from prior saves when possible.
+        existing = next((r for r in records if r.meta.get("token_index") == index), None)
+        if existing is None and index == 0:
+            existing = next((r for r in records if r.id == DEFAULT_CONNECTION_ID), None)
+        if existing is not None:
+            if not existing.identity and team.get("team_name"):
+                existing.identity = str(team["team_name"])
+            existing.meta = {
+                **(existing.meta or {}),
+                "token_index": index,
+                **({"team_id": team["team_id"]} if team.get("team_id") else {}),
+            }
+            expanded.append(existing)
+            continue
+        expanded.append(
+            ConnectionRecord(
+                id=conn_id,
+                label=str(team.get("team_name") or ("Default" if index == 0 else f"Workspace {index + 1}")),
+                enabled=True,
+                identity=str(team.get("team_name") or ""),
+                meta={
+                    "token_index": index,
+                    **({"team_id": team["team_id"]} if team.get("team_id") else {}),
+                },
+            )
+        )
+    return expanded
 
 
 def _write_platform_enabled(platform_id: str, enabled: bool) -> None:
     write_platform_config_field(platform_id, "enabled", enabled)
 
 
-def _whatsapp_session_dir() -> Path:
+def _whatsapp_session_dir(connection_id: str | None = None) -> Path:
     from hermes_constants import get_hermes_dir
 
-    session_dir = get_hermes_dir("platforms/whatsapp/session", "whatsapp/session")
+    from gateway.connections import DEFAULT_CONNECTION_ID, is_default_connection, sanitize_connection_id
+
+    if is_default_connection(connection_id):
+        # Legacy path for the default connection; also check migrated multi-session dir.
+        legacy = get_hermes_dir("platforms/whatsapp/session", "whatsapp/session")
+        multi = get_hermes_dir(
+            f"platforms/whatsapp/sessions/{DEFAULT_CONNECTION_ID}",
+            f"whatsapp/sessions/{DEFAULT_CONNECTION_ID}",
+        )
+        if (legacy / "creds.json").is_file():
+            legacy.mkdir(parents=True, exist_ok=True)
+            return legacy
+        multi.mkdir(parents=True, exist_ok=True)
+        return multi
+
+    safe = sanitize_connection_id(connection_id)
+    session_dir = get_hermes_dir(
+        f"platforms/whatsapp/sessions/{safe}",
+        f"whatsapp/sessions/{safe}",
+    )
     session_dir.mkdir(parents=True, exist_ok=True)
     return session_dir
 
 
-def _whatsapp_is_paired() -> bool:
-    return (_whatsapp_session_dir() / "creds.json").is_file()
+def _whatsapp_is_paired(connection_id: str | None = None) -> bool:
+    return (_whatsapp_session_dir(connection_id) / "creds.json").is_file()
 
 
 _WHATSAPP_PAIRING_TTL_SECONDS = 600
@@ -5588,6 +5825,7 @@ class WhatsAppPairingApply(BaseModel):
 
 class WhatsAppPairingStart(BaseModel):
     reset: bool = False
+    connection_id: Optional[str] = None
 
 
 @app.post("/api/messaging/whatsapp/pairing/start")
@@ -5596,15 +5834,17 @@ async def start_whatsapp_pairing(
     profile: Optional[str] = None,
 ):
     with _profile_scope(profile):
-        session_dir = _whatsapp_session_dir()
-        if _whatsapp_is_paired() and not body.reset:
+        connection_id = (body.connection_id or "default").strip() or "default"
+        session_dir = _whatsapp_session_dir(connection_id)
+        if _whatsapp_is_paired(connection_id) and not body.reset:
             return {
                 "pairing_id": None,
                 "status": "already_paired",
                 "paired": True,
+                "connection_id": connection_id,
             }
 
-        if body.reset and _whatsapp_is_paired():
+        if body.reset and _whatsapp_is_paired(connection_id):
             shutil.rmtree(session_dir, ignore_errors=True)
             session_dir.mkdir(parents=True, exist_ok=True)
 
@@ -6187,6 +6427,270 @@ async def update_messaging_platform(
     except Exception:
         _log.exception("PUT /api/messaging/platforms/%s failed", platform_id)
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+def _require_multi_account_platform(platform_id: str) -> dict[str, Any]:
+    entry = _catalog_lookup(platform_id)
+    if not entry:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown messaging platform: {platform_id}"
+        )
+    if platform_id not in _multi_account_platform_ids():
+        raise HTTPException(
+            status_code=400,
+            detail=f"{platform_id} does not support multiple connections",
+        )
+    return entry
+
+
+@app.get("/api/messaging/platforms/{platform_id}/connections")
+async def list_messaging_connections(
+    platform_id: str, profile: Optional[str] = None
+):
+    entry = _require_multi_account_platform(platform_id)
+    with _profile_scope(profile) as scoped_dir:
+        env_on_disk = load_env()
+        runtime = read_runtime_status()
+        payload = _messaging_platform_payload(
+            entry, env_on_disk, runtime, scoped=scoped_dir is not None
+        )
+        return {"platform": platform_id, "connections": payload.get("connections") or []}
+
+
+@app.post("/api/messaging/platforms/{platform_id}/connections")
+async def create_messaging_connection(
+    platform_id: str,
+    body: MessagingConnectionUpdate,
+    profile: Optional[str] = None,
+):
+    entry = _require_multi_account_platform(platform_id)
+    from gateway.connections import (
+        DEFAULT_CONNECTION_ID,
+        ConnectionRecord,
+        connection_credential_keys,
+        connection_env_key,
+        join_csv_tokens,
+        load_connections_for_platform,
+        new_connection_id,
+        save_connections_for_platform,
+        split_csv_tokens,
+    )
+
+    with _profile_scope(body.profile or profile):
+        records = load_connections_for_platform(platform_id)
+        if not any(r.id == DEFAULT_CONNECTION_ID for r in records):
+            # Ensure default exists before adding more.
+            env_on_disk = load_env()
+            payload = _messaging_platform_payload(entry, env_on_disk, read_runtime_status())
+            records = [
+                ConnectionRecord.from_dict(row)
+                for row in (payload.get("connections") or [])
+                if isinstance(row, dict)
+            ]
+
+        conn_id = new_connection_id(platform_id[:4] if platform_id else "conn")
+        label = (body.label or f"Connection {len(records) + 1}").strip()
+        record = ConnectionRecord(
+            id=conn_id,
+            label=label,
+            enabled=True if body.enabled is None else bool(body.enabled),
+            identity=(body.identity or "").strip(),
+        )
+
+        catalog_keys = [str(v) for v in entry.get("env_vars") or ()]
+        cred_keys = set(connection_credential_keys(platform_id, catalog_keys))
+        allowed_env = set(entry["env_vars"])
+
+        for key, value in body.env.items():
+            if key not in allowed_env:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{key} is not configurable for {entry['name']}",
+                )
+            if key not in cred_keys:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{key} is app-level; set it on the platform, not the connection",
+                )
+            trimmed = value.strip()
+            if not trimmed:
+                continue
+            _validate_messaging_env_value(platform_id, key, trimmed)
+
+            if platform_id == "slack" and key == "SLACK_BOT_TOKEN":
+                tokens = split_csv_tokens(load_env().get("SLACK_BOT_TOKEN") or "")
+                tokens.append(trimmed)
+                save_env_value("SLACK_BOT_TOKEN", join_csv_tokens(tokens))
+                record.meta["token_index"] = len(tokens) - 1
+            else:
+                save_env_value(connection_env_key(key, conn_id), trimmed)
+
+        records.append(record)
+        save_connections_for_platform(platform_id, records)
+        return {"ok": True, "platform": platform_id, "connection": record.to_dict()}
+
+
+@app.put("/api/messaging/platforms/{platform_id}/connections/{connection_id}")
+async def update_messaging_connection(
+    platform_id: str,
+    connection_id: str,
+    body: MessagingConnectionUpdate,
+    profile: Optional[str] = None,
+):
+    entry = _require_multi_account_platform(platform_id)
+    from gateway.connections import (
+        DEFAULT_CONNECTION_ID,
+        connection_credential_keys,
+        connection_env_key,
+        join_csv_tokens,
+        load_connections_for_platform,
+        save_connections_for_platform,
+        split_csv_tokens,
+    )
+
+    with _profile_scope(body.profile or profile):
+        records = load_connections_for_platform(platform_id)
+        match = next((r for r in records if r.id == connection_id), None)
+        if match is None:
+            # Allow updating synthetic default before first persist.
+            if connection_id == DEFAULT_CONNECTION_ID:
+                from gateway.connections import ConnectionRecord
+
+                match = ConnectionRecord(id=DEFAULT_CONNECTION_ID, label="Default")
+                records = [match, *[r for r in records if r.id != DEFAULT_CONNECTION_ID]]
+            else:
+                raise HTTPException(status_code=404, detail="Connection not found")
+
+        if body.label is not None:
+            match.label = body.label.strip()
+        if body.enabled is not None:
+            match.enabled = bool(body.enabled)
+        if body.identity is not None:
+            match.identity = body.identity.strip()
+
+        catalog_keys = [str(v) for v in entry.get("env_vars") or ()]
+        cred_keys = set(connection_credential_keys(platform_id, catalog_keys))
+        allowed_env = set(entry["env_vars"])
+
+        for key in body.clear_env:
+            if key not in allowed_env or key not in cred_keys:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{key} is not a connection credential for {entry['name']}",
+                )
+            if platform_id == "slack" and key == "SLACK_BOT_TOKEN":
+                tokens = split_csv_tokens(load_env().get("SLACK_BOT_TOKEN") or "")
+                idx = match.meta.get("token_index")
+                if isinstance(idx, int) and 0 <= idx < len(tokens):
+                    tokens.pop(idx)
+                    if tokens:
+                        save_env_value("SLACK_BOT_TOKEN", join_csv_tokens(tokens))
+                    else:
+                        remove_env_value("SLACK_BOT_TOKEN")
+            else:
+                storage = connection_env_key(key, connection_id)
+                remove_env_value(storage)
+                if connection_id == DEFAULT_CONNECTION_ID:
+                    remove_env_value(key)
+
+        for key, value in body.env.items():
+            if key not in allowed_env or key not in cred_keys:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{key} is not a connection credential for {entry['name']}",
+                )
+            trimmed = value.strip()
+            if not trimmed:
+                continue
+            _validate_messaging_env_value(platform_id, key, trimmed)
+            if platform_id == "slack" and key == "SLACK_BOT_TOKEN":
+                tokens = split_csv_tokens(load_env().get("SLACK_BOT_TOKEN") or "")
+                idx = match.meta.get("token_index")
+                if isinstance(idx, int) and 0 <= idx < len(tokens):
+                    tokens[idx] = trimmed
+                elif connection_id == DEFAULT_CONNECTION_ID:
+                    if tokens:
+                        tokens[0] = trimmed
+                    else:
+                        tokens = [trimmed]
+                    match.meta["token_index"] = 0
+                else:
+                    tokens.append(trimmed)
+                    match.meta["token_index"] = len(tokens) - 1
+                save_env_value("SLACK_BOT_TOKEN", join_csv_tokens(tokens))
+            else:
+                save_env_value(connection_env_key(key, connection_id), trimmed)
+                if connection_id == DEFAULT_CONNECTION_ID:
+                    # Keep legacy key in sync for gateway loaders.
+                    save_env_value(key, trimmed)
+
+        save_connections_for_platform(platform_id, records)
+        return {"ok": True, "platform": platform_id, "connection": match.to_dict()}
+
+
+@app.delete("/api/messaging/platforms/{platform_id}/connections/{connection_id}")
+async def delete_messaging_connection(
+    platform_id: str,
+    connection_id: str,
+    profile: Optional[str] = None,
+):
+    _require_multi_account_platform(platform_id)
+    from gateway.connections import (
+        DEFAULT_CONNECTION_ID,
+        connection_credential_keys,
+        connection_env_key,
+        join_csv_tokens,
+        load_connections_for_platform,
+        save_connections_for_platform,
+        split_csv_tokens,
+    )
+
+    if connection_id == DEFAULT_CONNECTION_ID:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot delete the default connection; clear its credentials instead.",
+        )
+
+    entry = _catalog_lookup(platform_id)
+    with _profile_scope(profile):
+        records = load_connections_for_platform(platform_id)
+        match = next((r for r in records if r.id == connection_id), None)
+        if match is None:
+            raise HTTPException(status_code=404, detail="Connection not found")
+
+        catalog_keys = [str(v) for v in (entry or {}).get("env_vars") or ()]
+        cred_keys = connection_credential_keys(platform_id, catalog_keys)
+
+        if platform_id == "slack":
+            tokens = split_csv_tokens(load_env().get("SLACK_BOT_TOKEN") or "")
+            idx = match.meta.get("token_index")
+            if isinstance(idx, int) and 0 <= idx < len(tokens):
+                tokens.pop(idx)
+                if tokens:
+                    save_env_value("SLACK_BOT_TOKEN", join_csv_tokens(tokens))
+                else:
+                    remove_env_value("SLACK_BOT_TOKEN")
+                # Reindex remaining connection metadata.
+                for record in records:
+                    ti = record.meta.get("token_index")
+                    if isinstance(ti, int) and ti > idx:
+                        record.meta["token_index"] = ti - 1
+        else:
+            for key in cred_keys:
+                remove_env_value(connection_env_key(key, connection_id))
+
+        if platform_id == "whatsapp":
+            session_dir = _whatsapp_session_dir(connection_id)
+            try:
+                if session_dir.exists() and "sessions" in str(session_dir):
+                    shutil.rmtree(session_dir, ignore_errors=True)
+            except Exception:
+                _log.debug("Could not remove WhatsApp session dir", exc_info=True)
+
+        save_connections_for_platform(
+            platform_id, [r for r in records if r.id != connection_id]
+        )
+        return {"ok": True, "platform": platform_id, "connection_id": connection_id}
 
 
 @app.get("/api/messaging/slack/manifest")

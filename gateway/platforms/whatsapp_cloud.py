@@ -196,6 +196,15 @@ class WhatsAppCloudAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         # Required
         self._phone_number_id: str = str(extra.get("phone_number_id", "")).strip()
         self._access_token: str = str(extra.get("access_token", "")).strip()
+        # Multi-number map: phone_number_id → {connection_id, access_token}
+        self._phone_connections: Dict[str, Dict[str, str]] = self._load_phone_connections(
+            extra
+        )
+        if self._phone_number_id and self._phone_number_id not in self._phone_connections:
+            self._phone_connections[self._phone_number_id] = {
+                "connection_id": "default",
+                "access_token": self._access_token,
+            }
 
         # Optional / used in later phases
         self._app_id: str = str(extra.get("app_id", "")).strip()
@@ -299,11 +308,77 @@ class WhatsAppCloudAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         raw = str(path or "").strip() or "/"
         return raw if raw.startswith("/") else f"/{raw}"
 
-    def _graph_url(self, path: str) -> str:
+    def _load_phone_connections(self, extra: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
+        """Load multi-number map from config connections + scoped env keys."""
+        import os
+
+        from gateway.connections import (
+            DEFAULT_CONNECTION_ID,
+            connection_env_key,
+            connections_from_platform_dict,
+            load_connections_for_platform,
+        )
+
+        mapping: Dict[str, Dict[str, str]] = {}
+        records = connections_from_platform_dict(
+            {"connections": list(getattr(self.config, "connections", None) or [])}
+        )
+        if not records:
+            try:
+                records = load_connections_for_platform("whatsapp_cloud")
+            except Exception:
+                records = []
+
+        for record in records:
+            phone = (
+                os.getenv(
+                    connection_env_key("WHATSAPP_CLOUD_PHONE_NUMBER_ID", record.id),
+                    "",
+                )
+                or ""
+            ).strip()
+            if not phone and record.id == DEFAULT_CONNECTION_ID:
+                phone = (
+                    os.getenv("WHATSAPP_CLOUD_PHONE_NUMBER_ID", "")
+                    or str(extra.get("phone_number_id") or "")
+                ).strip()
+            access = (
+                os.getenv(
+                    connection_env_key("WHATSAPP_CLOUD_ACCESS_TOKEN", record.id),
+                    "",
+                )
+                or ""
+            ).strip()
+            if not access and record.id == DEFAULT_CONNECTION_ID:
+                access = (
+                    os.getenv("WHATSAPP_CLOUD_ACCESS_TOKEN", "")
+                    or str(extra.get("access_token") or "")
+                ).strip()
+            if phone:
+                mapping[phone] = {
+                    "connection_id": record.id,
+                    "access_token": access or self._access_token,
+                }
+        return mapping
+
+    def _graph_url(self, path: str, phone_number_id: Optional[str] = None) -> str:
         """Build a Graph API URL for this adapter's phone-number scope."""
         if path.startswith("/"):
             path = path[1:]
-        return f"{GRAPH_API_BASE}/{self._api_version}/{self._phone_number_id}/{path}"
+        phone = (phone_number_id or self._phone_number_id).strip()
+        return f"{GRAPH_API_BASE}/{self._api_version}/{phone}/{path}"
+
+    def _resolve_outbound_phone(
+        self, metadata: Optional[Dict[str, Any]]
+    ) -> tuple[str, str]:
+        """Return (phone_number_id, access_token) for an outbound send."""
+        meta = metadata or {}
+        conn_id = str(meta.get("connection_id") or "").strip()
+        if conn_id:
+            for phone, info in self._phone_connections.items():
+                if info.get("connection_id") == conn_id:
+                    return phone, info.get("access_token") or self._access_token
+        return self._phone_number_id, self._access_token
 
     @staticmethod
     def _bounded_put(cache: "OrderedDict[str, str]", key: str, value: str) -> None:
@@ -442,9 +517,10 @@ class WhatsAppCloudAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         formatted = self.format_message(content)
         chunks = self.truncate_message(formatted, self._outgoing_chunk_limit())
 
-        url = self._graph_url("messages")
+        phone_id, access_token = self._resolve_outbound_phone(metadata)
+        url = self._graph_url("messages", phone_number_id=phone_id)
         headers = {
-            "Authorization": f"Bearer {self._access_token}",
+            "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
         }
 
@@ -1934,6 +2010,10 @@ class WhatsAppCloudAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
             user_id=sender_id,
             user_name=sender_name or None,
         )
+        inbound_phone = str(metadata.get("phone_number_id") or "").strip()
+        conn_info = self._phone_connections.get(inbound_phone) if inbound_phone else None
+        if conn_info and conn_info.get("connection_id"):
+            source.connection_id = conn_info["connection_id"]
 
         # Cloud API timestamps are unix seconds (string). MessageEvent
         # doesn't enforce a type but downstream code formats with it.

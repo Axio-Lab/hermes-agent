@@ -119,6 +119,9 @@ class SessionSource:
     # None => the gateway's active/default profile. Drives both session-key
     # namespacing and the per-turn config/credential scope.
     profile: Optional[str] = None
+    # Multi-account connection under the platform (bot / workspace / number).
+    # None or "default" => legacy single-account session keys (byte-identical).
+    connection_id: Optional[str] = None
     
     @property
     def description(self) -> str:
@@ -164,6 +167,8 @@ class SessionSource:
             d["message_id"] = self.message_id
         if self.profile:
             d["profile"] = self.profile
+        if self.connection_id and self.connection_id != "default":
+            d["connection_id"] = self.connection_id
         return d
 
     @classmethod
@@ -183,6 +188,7 @@ class SessionSource:
             parent_chat_id=data.get("parent_chat_id"),
             message_id=data.get("message_id"),
             profile=data.get("profile"),
+            connection_id=data.get("connection_id"),
         )
     
 
@@ -711,6 +717,12 @@ def build_session_key(
     """
     ns = _session_key_namespace(profile)
     platform = source.platform.value
+    # Optional multi-account suffix. Omitted for default/legacy so existing
+    # session keys stay byte-identical.
+    conn_suffix = ""
+    if source.connection_id and source.connection_id != "default":
+        conn_suffix = f":c_{source.connection_id}"
+
     if source.chat_type == "dm":
         dm_chat_id = source.chat_id
         if source.platform == Platform.WHATSAPP:
@@ -718,8 +730,8 @@ def build_session_key(
 
         if dm_chat_id:
             if source.thread_id:
-                return f"{ns}:{platform}:dm:{dm_chat_id}:{source.thread_id}"
-            return f"{ns}:{platform}:dm:{dm_chat_id}"
+                return f"{ns}:{platform}:dm:{dm_chat_id}:{source.thread_id}{conn_suffix}"
+            return f"{ns}:{platform}:dm:{dm_chat_id}{conn_suffix}"
         # No chat_id — fall back to the sender's own identifier before the
         # bare per-platform sink.  Without this, every DM from every user that
         # arrives without a chat_id (non-standard adapters / synthetic sources)
@@ -734,11 +746,11 @@ def build_session_key(
             )
         if dm_participant_id:
             if source.thread_id:
-                return f"{ns}:{platform}:dm:{dm_participant_id}:{source.thread_id}"
-            return f"{ns}:{platform}:dm:{dm_participant_id}"
+                return f"{ns}:{platform}:dm:{dm_participant_id}:{source.thread_id}{conn_suffix}"
+            return f"{ns}:{platform}:dm:{dm_participant_id}{conn_suffix}"
         if source.thread_id:
-            return f"{ns}:{platform}:dm:{source.thread_id}"
-        return f"{ns}:{platform}:dm"
+            return f"{ns}:{platform}:dm:{source.thread_id}{conn_suffix}"
+        return f"{ns}:{platform}:dm{conn_suffix}"
 
     participant_id = source.user_id_alt or source.user_id
     if participant_id and source.platform == Platform.WHATSAPP:
@@ -762,6 +774,9 @@ def build_session_key(
 
     if isolate_user and participant_id:
         key_parts.append(str(participant_id))
+
+    if conn_suffix:
+        key_parts.append(f"c_{source.connection_id}")
 
     return ":".join(key_parts)
 

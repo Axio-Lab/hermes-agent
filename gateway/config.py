@@ -339,6 +339,10 @@ class PlatformConfig:
     # Platform-specific settings
     extra: Dict[str, Any] = field(default_factory=dict)
 
+    # Multi-account connections (bots / workspaces / phone numbers). Empty
+    # means legacy single-credential mode. See gateway.connections.
+    connections: List[Dict[str, Any]] = field(default_factory=list)
+
     def to_dict(self) -> Dict[str, Any]:
         result = {
             "enabled": self.enabled,
@@ -352,6 +356,8 @@ class PlatformConfig:
             result["api_key"] = self.api_key
         if self.home_channel:
             result["home_channel"] = self.home_channel.to_dict()
+        if self.connections:
+            result["connections"] = list(self.connections)
         return result
 
     @classmethod
@@ -368,6 +374,11 @@ class PlatformConfig:
         if _grn is None:
             _grn = data.get("extra", {}).get("gateway_restart_notification")
 
+        raw_connections = data.get("connections")
+        connections: List[Dict[str, Any]] = []
+        if isinstance(raw_connections, list):
+            connections = [item for item in raw_connections if isinstance(item, dict)]
+
         return cls(
             enabled=_coerce_bool(data.get("enabled"), False),
             token=data.get("token"),
@@ -376,6 +387,7 @@ class PlatformConfig:
             reply_to_mode=data.get("reply_to_mode", "first"),
             gateway_restart_notification=_coerce_bool(_grn, True),
             extra=data.get("extra", {}),
+            connections=connections,
         )
 
 
