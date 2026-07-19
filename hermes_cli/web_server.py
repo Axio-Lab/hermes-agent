@@ -5379,8 +5379,7 @@ def _messaging_platform_payload(
                 _write_platform_enabled("whatsapp", False)
                 remove_env_value("WHATSAPP_ENABLED")
                 enabled = False
-                if state not in (None, "disabled", "not_configured"):
-                    state = "not_configured"
+                state = "disabled"
             except Exception:
                 _log.debug("Could not reset unpaired WhatsApp enablement", exc_info=True)
 
@@ -5455,31 +5454,26 @@ def _messaging_connections_payload(
     catalog_keys = [str(v) for v in entry.get("env_vars") or ()]
     cred_keys = connection_credential_keys(platform_id, catalog_keys)
 
-    records = load_connections_for_platform(platform_id)
-
-    # Slack: expand comma-separated bot tokens into workspace rows when metadata is thin.
-    if platform_id == "slack":
-        records = _slack_connection_records(records, env_on_disk)
-
-    legacy_set = bool((env_on_disk.get(primary) or "").strip()) if primary else False
-    if platform_id == "whatsapp":
-        legacy_set = _whatsapp_is_paired()
-
-    records = ensure_default_connection(
-        platform_id,
-        records,
-        has_legacy_credentials=legacy_set,
-        label="Default",
-    )
-
-    # Persist migrated default so subsequent GETs stay stable.
+    # Rebuild from config + .env __CONN_* + Slack CSV + WhatsApp sessions, then
+    # persist so rebuilds keep every connected account visible and gateway-ready.
     try:
-        from gateway.connections import save_connections_for_platform
+        from gateway.connections import recover_connections_for_platform
 
-        if not load_connections_for_platform(platform_id) and records:
-            save_connections_for_platform(platform_id, records)
+        records, _ = recover_connections_for_platform(
+            platform_id, env_on_disk, persist=True
+        )
     except Exception:
-        _log.debug("Could not persist migrated messaging connections", exc_info=True)
+        _log.debug("Could not recover messaging connections", exc_info=True)
+        records = load_connections_for_platform(platform_id, env=env_on_disk)
+        legacy_set = bool((env_on_disk.get(primary) or "").strip()) if primary else False
+        if platform_id == "whatsapp":
+            legacy_set = _whatsapp_is_paired()
+        records = ensure_default_connection(
+            platform_id,
+            records,
+            has_legacy_credentials=legacy_set,
+            label="Default",
+        )
 
     out: list[dict[str, Any]] = []
     for record in records:
@@ -5553,70 +5547,9 @@ def _slack_connection_records(
     env_on_disk: dict[str, str],
 ) -> list[Any]:
     """Synthesize Slack workspace connections from CSV tokens + slack_tokens.json."""
-    from gateway.connections import (
-        DEFAULT_CONNECTION_ID,
-        ConnectionRecord,
-        split_csv_tokens,
-    )
+    from gateway.connections import expand_slack_connections
 
-    tokens = split_csv_tokens(env_on_disk.get("SLACK_BOT_TOKEN") or "")
-    team_by_token: dict[str, dict[str, Any]] = {}
-    try:
-        tokens_path = get_hermes_home() / "slack_tokens.json"
-        if tokens_path.is_file():
-            raw = json.loads(tokens_path.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                for team_id, info in raw.items():
-                    if not isinstance(info, dict):
-                        continue
-                    tok = str(info.get("bot_token") or info.get("token") or "").strip()
-                    if tok:
-                        team_by_token[tok] = {
-                            "team_id": str(team_id),
-                            "team_name": str(info.get("team_name") or info.get("name") or team_id),
-                        }
-    except Exception:
-        _log.debug("Could not read slack_tokens.json", exc_info=True)
-
-    if not tokens:
-        return list(records)
-
-    # Prefer existing metadata when present; otherwise expand from CSV.
-    if len(records) >= len(tokens) and all(
-        isinstance(r, ConnectionRecord) for r in records
-    ):
-        return list(records)
-
-    expanded: list[ConnectionRecord] = []
-    for index, token in enumerate(tokens):
-        team = team_by_token.get(token, {})
-        conn_id = DEFAULT_CONNECTION_ID if index == 0 else f"slack_{index}"
-        # Keep stable ids from prior saves when possible.
-        existing = next((r for r in records if r.meta.get("token_index") == index), None)
-        if existing is None and index == 0:
-            existing = next((r for r in records if r.id == DEFAULT_CONNECTION_ID), None)
-        if existing is not None:
-            if not existing.identity and team.get("team_name"):
-                existing.identity = str(team["team_name"])
-            existing.meta = {
-                **(existing.meta or {}),
-                "token_index": index,
-                **({"team_id": team["team_id"]} if team.get("team_id") else {}),
-            }
-            expanded.append(existing)
-            continue
-        expanded.append(
-            ConnectionRecord(
-                id=conn_id,
-                label=str(team.get("team_name") or ("Default" if index == 0 else f"Workspace {index + 1}")),
-                enabled=True,
-                identity=str(team.get("team_name") or ""),
-                meta={
-                    "token_index": index,
-                    **({"team_id": team["team_id"]} if team.get("team_id") else {}),
-                },
-            )
-        )
+    expanded, _ = expand_slack_connections(list(records), env_on_disk)
     return expanded
 
 
@@ -6527,6 +6460,12 @@ async def create_messaging_connection(
 
         records.append(record)
         save_connections_for_platform(platform_id, records)
+        try:
+            from gateway.connections import persist_connection_label
+
+            persist_connection_label(platform_id, record.id, record.label)
+        except Exception:
+            pass
         return {"ok": True, "platform": platform_id, "connection": record.to_dict()}
 
 

@@ -30,6 +30,45 @@ def test_ensure_default_connection_when_legacy_present():
     assert records[0].id == DEFAULT_CONNECTION_ID
 
 
+def test_ensure_default_connection_skips_empty_without_credentials():
+    records = ensure_default_connection(
+        "discord",
+        [],
+        has_legacy_credentials=False,
+        label="Default",
+    )
+    assert records == []
+
+
+def test_recover_skips_platforms_without_env_credentials(tmp_path, monkeypatch):
+    from gateway.connections import recover_connections_for_platform
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / "config.yaml").write_text(
+        "\n".join(
+            [
+                "platforms:",
+                "  discord:",
+                "    enabled: true",
+                "    connections:",
+                "      - id: default",
+                "        label: Default",
+                "        enabled: true",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    records, changed = recover_connections_for_platform(
+        "discord", {}, persist=True
+    )
+    assert records == []
+    assert changed is True
+    saved = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+    assert "enabled: false" in saved
+    assert "id: default" not in saved
+
+
 def test_session_key_unchanged_without_connection_id():
     source = SessionSource(platform=Platform.TELEGRAM, chat_id="99", chat_type="dm")
     assert build_session_key(source) == "agent:main:telegram:dm:99"
@@ -74,3 +113,81 @@ def test_connection_record_roundtrip():
     assert restored.meta["team_id"] == "T1"
     assert is_default_connection(DEFAULT_CONNECTION_ID)
     assert not is_default_connection("sales")
+
+
+def test_merge_env_discovered_connections_restores_unique_tokens():
+    from gateway.connections import merge_env_discovered_connections
+
+    env = {
+        "TELEGRAM_BOT_TOKEN": "default-token",
+        "TELEGRAM_BOT_TOKEN__CONN_TELE_AAAA1111": "extra-token",
+        # Orphan that duplicates Default — must not become a second row.
+        "TELEGRAM_BOT_TOKEN__CONN_TELE_BBBB2222": "default-token",
+    }
+    records, changed = merge_env_discovered_connections(
+        "telegram",
+        [ConnectionRecord(id=DEFAULT_CONNECTION_ID, label="Default")],
+        env,
+    )
+    assert changed is True
+    ids = [r.id for r in records]
+    assert ids == [DEFAULT_CONNECTION_ID, "tele_aaaa1111"]
+    assert "tele_bbbb2222" not in ids
+
+
+def test_merge_env_discovered_connections_noop_when_already_present():
+    from gateway.connections import merge_env_discovered_connections
+
+    env = {"TELEGRAM_BOT_TOKEN__CONN_TELE_AAAA1111": "extra-token"}
+    records, changed = merge_env_discovered_connections(
+        "telegram",
+        [
+            ConnectionRecord(id=DEFAULT_CONNECTION_ID, label="Default"),
+            ConnectionRecord(id="tele_aaaa1111", label="AI Pundit"),
+        ],
+        env,
+    )
+    assert changed is False
+    assert len(records) == 2
+
+
+def test_expand_slack_connections_from_csv():
+    from gateway.connections import expand_slack_connections
+
+    env = {"SLACK_BOT_TOKEN": "xoxb-a,xoxb-b"}
+    records, changed = expand_slack_connections([], env)
+    assert changed is True
+    assert [r.id for r in records] == [DEFAULT_CONNECTION_ID, "slack_1"]
+    assert records[1].meta.get("token_index") == 1
+
+
+def test_recover_connections_discord_from_env(tmp_path, monkeypatch):
+    from gateway.connections import recover_connections_for_platform
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / "config.yaml").write_text("platforms: {}\n", encoding="utf-8")
+    env = {
+        "DISCORD_BOT_TOKEN": "default-discord",
+        "DISCORD_BOT_TOKEN__CONN_DISC_ABCDEF12": "second-discord",
+        "DISCORD_CONNECTION_LABEL__CONN_DISC_ABCDEF12": "Ops Bot",
+    }
+    records, changed = recover_connections_for_platform(
+        "discord", env, persist=True
+    )
+    assert changed is True
+    assert [r.id for r in records] == [DEFAULT_CONNECTION_ID, "disc_abcdef12"]
+    assert records[1].label == "Ops Bot"
+    saved = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+    assert "disc_abcdef12" in saved
+    assert "Ops Bot" in saved
+
+
+def test_persist_and_read_connection_label(tmp_path, monkeypatch):
+    from gateway.connections import persist_connection_label, read_connection_label
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / ".env").write_text("", encoding="utf-8")
+    persist_connection_label("telegram", "tele_f4f2e55f", "AI Pundit")
+    env_text = (tmp_path / ".env").read_text(encoding="utf-8")
+    assert "TELEGRAM_CONNECTION_LABEL__CONN_TELE_F4F2E55F=AI Pundit" in env_text
+    assert read_connection_label("telegram", "tele_f4f2e55f") == "AI Pundit"

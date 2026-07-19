@@ -5513,6 +5513,33 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             self._gateway_loop = None
         logger.info("Session storage: %s", self.config.sessions_dir)
 
+        # Rebuild messaging connection rows wiped from config.yaml on Docker
+        # migrate/rebuild (Telegram/Discord/Slack/WhatsApp). Credentials live
+        # in .env / session dirs; this restores UI + multi-adapter wiring.
+        try:
+            from gateway.connections import recover_all_messaging_connections
+
+            recovered = recover_all_messaging_connections(persist=True)
+            if recovered:
+                logger.info(
+                    "Recovered messaging connections: %s",
+                    ", ".join(
+                        f"{platform}={len(rows)}"
+                        for platform, rows in sorted(recovered.items())
+                    ),
+                )
+                # Refresh in-memory platform.connections from the recovered yaml.
+                for platform, rows in recovered.items():
+                    try:
+                        plat = Platform(platform)
+                    except ValueError:
+                        continue
+                    pcfg = self.config.platforms.get(plat)
+                    if pcfg is not None:
+                        pcfg.connections = [r.to_dict() for r in rows]
+        except Exception:
+            logger.debug("Messaging connection recovery skipped", exc_info=True)
+
         # Sanity-check that systemd's TimeoutStopSec covers our drain
         # window.  When the user upgraded hermes-agent without re-running
         # ``hermes setup``, their unit file may still encode the old
@@ -7380,16 +7407,16 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # WhatsApp Cloud shares one webhook and routes by phone_number_id.
             return
 
-        records = connections_from_platform_dict(
-            {"connections": getattr(platform_config, "connections", None) or []}
-        )
-        if not records:
-            try:
-                from gateway.connections import load_connections_for_platform
+        try:
+            from gateway.connections import recover_connections_for_platform
 
-                records = load_connections_for_platform(platform_id)
-            except Exception:
-                records = []
+            # Rebuild from .env / session dirs when config.yaml lost connection
+            # rows on Docker migrate/rebuild — persist so UI + gateway stay aligned.
+            records, _ = recover_connections_for_platform(platform_id, persist=True)
+        except Exception:
+            records = connections_from_platform_dict(
+                {"connections": getattr(platform_config, "connections", None) or []}
+            )
 
         primary = PRIMARY_CREDENTIAL_ENV.get(platform_id, "")
         for record in records:
