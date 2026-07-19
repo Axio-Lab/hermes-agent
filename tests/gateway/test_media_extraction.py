@@ -11,6 +11,8 @@ make_image tool several turns earlier must not leak onto a later
 text-only reply, even when the path-based dedup set fails to capture it.
 """
 
+import json
+
 import pytest
 import re
 
@@ -184,6 +186,63 @@ caption
         tags, voice = _collect_auto_append_media_tags(messages, history_offset=0)
         assert tags == ["MEDIA:/tmp/gen/cat.png"]
         assert voice is False
+
+    def test_gateway_auto_append_write_file_artifact_md(self):
+        """write_file under /workspace/artifacts auto-attaches even without MEDIA:."""
+        from gateway.run import _collect_auto_append_media_tags
+
+        report = "/workspace/artifacts/azu-mangala-business-report.md"
+        messages = [
+            {"role": "user", "content": "Write the report"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "call_write", "function": {"name": "write_file"}}
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_write",
+                "content": json.dumps({
+                    "bytes_written": 1200,
+                    "resolved_path": report,
+                    "files_modified": [report],
+                }),
+            },
+            {
+                "role": "assistant",
+                "content": f"Report saved to {report}.",
+            },
+        ]
+
+        tags, voice = _collect_auto_append_media_tags(messages, history_offset=0)
+        assert tags == [f"MEDIA:{report}"]
+        assert voice is False
+
+    def test_gateway_auto_append_write_file_non_artifact_ignored(self):
+        """Ordinary source edits outside artifacts/ must not auto-attach."""
+        from gateway.run import _collect_auto_append_media_tags
+
+        messages = [
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "call_write", "function": {"name": "write_file"}}
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_write",
+                "content": json.dumps({
+                    "bytes_written": 40,
+                    "resolved_path": "/workspace/src/app.py",
+                    "files_modified": ["/workspace/src/app.py"],
+                }),
+            },
+        ]
+
+        tags, _ = _collect_auto_append_media_tags(messages, history_offset=0)
+        assert tags == []
 
     def test_gateway_auto_append_image_generate_prefers_host_path(self):
         """When host and sandbox paths differ, the host-deliverable path wins."""

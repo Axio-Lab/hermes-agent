@@ -959,7 +959,16 @@ _AUTO_APPEND_MEDIA_TOOL_NAMES = {
     "text_to_speech",
     "text_to_speech_tool",
     "image_generate",
+    # File tools: only paths under an ``artifacts/`` directory with a
+    # deliverable extension are appended (see ``_artifact_paths_from_tool_json``).
+    "write_file",
+    "patch",
 }
+
+# Directory segment that marks user-facing generated deliverables (Verxio
+# ``/workspace/artifacts``, Hermes ``~/.../artifacts``, etc.). Source edits
+# outside this segment are never auto-attached to messaging replies.
+_AUTO_APPEND_ARTIFACT_DIR = "artifacts"
 
 # ---- helpers: detect interrupted tool tails & auto-continue noise ----------
 
@@ -1106,17 +1115,91 @@ def _strip_auto_continue_noise(content: Any) -> Any:
 _JSON_MEDIA_TOOL_PATH_FIELDS = ("host_image", "image", "agent_visible_image")
 
 
-# Extension-anchored MEDIA: matcher for tool results. Mirrors the dispatch-site
-# pattern so a bare ``MEDIA:`` token in prose (no deliverable extension) is never
+# Extension-anchored MEDIA: matcher for tool results. Mirrors MEDIA_DELIVERY_EXTS
+# so a bare ``MEDIA:`` token in prose (no deliverable extension) is never
 # auto-appended. Kept local to the auto-append path; the producer-tool allowlist
 # below is the primary guard, this is the secondary precision guard.
 _TOOL_MEDIA_RE = re.compile(
-    r'MEDIA:((?:[A-Za-z]:[/\\]|/|~\/)\S+\.(?:png|jpe?g|gif|webp|'
+    r'MEDIA:((?:[A-Za-z]:[/\\]|/|~\/)\S+\.(?:png|jpe?g|gif|webp|bmp|tiff|svg|'
     r'mp4|mov|avi|mkv|webm|ogg|opus|mp3|wav|m4a|'
-    r'flac|epub|pdf|zip|rar|7z|docx?|xlsx?|pptx?|'
-    r'txt|csv|apk|ipa))',
+    r'flac|epub|pdf|zip|rar|7z|tgz|docx?|xlsx?|pptx?|odt|ods|odp|rtf|'
+    r'txt|md|csv|tsv|json|xml|ya?ml|html?|apk|ipa))',
     re.IGNORECASE,
 )
+
+_DELIVERABLE_ARTIFACT_EXTS = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".svg",
+    ".mp4", ".mov", ".avi", ".mkv", ".webm",
+    ".mp3", ".wav", ".ogg", ".opus", ".m4a", ".flac",
+    ".pdf", ".docx", ".doc", ".odt", ".rtf", ".txt", ".md", ".epub",
+    ".xlsx", ".xls", ".ods", ".csv", ".tsv", ".json", ".xml", ".yaml", ".yml",
+    ".pptx", ".ppt", ".odp", ".key",
+    ".zip", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar", ".apk", ".ipa",
+    ".html", ".htm",
+})
+
+
+def _is_deliverable_artifact_path(path: str) -> bool:
+    """True when *path* is a user-facing artifact file we should auto-attach.
+
+    Requires an ``artifacts/`` directory segment and a known deliverable
+    extension. Absolute paths only — relative mentions stay model-owned.
+    """
+    if not isinstance(path, str) or not path.strip():
+        return False
+    candidate = path.strip()
+    if not (candidate.startswith("/") or candidate.startswith("~/")
+            or (len(candidate) > 2 and candidate[1] == ":" and candidate[0].isalpha())):
+        return False
+    try:
+        expanded = Path(os.path.expanduser(candidate))
+    except (OSError, RuntimeError, ValueError):
+        return False
+    parts = expanded.parts
+    try:
+        idx = parts.index(_AUTO_APPEND_ARTIFACT_DIR)
+    except ValueError:
+        return False
+    # ``.../artifacts`` alone is a directory; need a file under it.
+    if idx >= len(parts) - 1:
+        return False
+    return expanded.suffix.lower() in _DELIVERABLE_ARTIFACT_EXTS
+
+
+def _artifact_paths_from_tool_json(content: str) -> List[str]:
+    """Pull deliverable artifact paths from write_file/patch JSON results."""
+    try:
+        payload = json.loads(content)
+    except Exception:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    if payload.get("error"):
+        return []
+    # patch uses success=false on failure; write_file omits success on OK.
+    if "success" in payload and not payload.get("success"):
+        return []
+
+    found: List[str] = []
+    seen: set = set()
+
+    def _add(raw: Any) -> None:
+        if not isinstance(raw, str):
+            return
+        if not _is_deliverable_artifact_path(raw):
+            return
+        if raw in seen:
+            return
+        seen.add(raw)
+        found.append(raw)
+
+    _add(payload.get("resolved_path"))
+    for key in ("files_modified", "files_created"):
+        items = payload.get(key)
+        if isinstance(items, list):
+            for item in items:
+                _add(item)
+    return found
 
 
 def _collect_auto_append_media_tags(
@@ -1129,9 +1212,10 @@ def _collect_auto_append_media_tags(
     Two layered guards keep stale/example MEDIA: strings out of the reply:
 
     1. Producer-tool allowlist: only tools that intentionally emit deliverable
-       artifacts (TTS) are eligible. Documentation, logs, and search results can
-       contain example strings such as MEDIA:/absolute/path/to/file, which must
-       never be delivered as attachments. (Fixes the original report behind #16721.)
+       artifacts (TTS, image gen, write_file/patch under ``artifacts/``) are
+       eligible. Documentation, logs, and search results can contain example
+       strings such as MEDIA:/absolute/path/to/file, which must never be
+       delivered as attachments. (Fixes the original report behind #16721.)
     2. Current-turn isolation: only messages produced this turn are scanned, so a
        tool result from an earlier turn (still present in the full message list)
        cannot leak onto a later text-only reply (#34608).
@@ -1188,6 +1272,13 @@ def _collect_auto_append_media_tags(
                         media_tags.append(f"MEDIA:{path}")
                         break
             continue
+        # write_file / patch: auto-attach deliverable files under artifacts/
+        # so messaging users get the document without opening the web app.
+        if tool_name in ("write_file", "patch"):
+            for path in _artifact_paths_from_tool_json(content):
+                if path not in history_media_paths:
+                    media_tags.append(f"MEDIA:{path}")
+            continue
         if "MEDIA:" not in content:
             continue
         for match in _TOOL_MEDIA_RE.finditer(content):
@@ -1204,10 +1295,11 @@ def _collect_history_media_paths(agent_history: List[Dict[str, Any]]) -> set:
     """Collect every media path already delivered in prior tool results.
 
     Used to dedup auto-appended MEDIA tags so the same file is not re-sent on
-    later turns. Must cover BOTH delivery shapes:
-      * ``MEDIA:<path>`` text tags in tool results, and
+    later turns. Must cover:
+      * ``MEDIA:<path>`` text tags in tool results,
       * ``image_generate`` JSON-payload paths (``host_image`` / ``image`` /
-        ``agent_visible_image``), which carry no MEDIA: tag.
+        ``agent_visible_image``), which carry no MEDIA: tag, and
+      * ``write_file`` / ``patch`` artifact paths under ``artifacts/``.
 
     Missing the JSON-payload shape caused #46627: after a compression
     boundary the auto-append fallback rescans full history, re-discovers an
@@ -1235,7 +1327,8 @@ def _collect_history_media_paths(agent_history: List[Dict[str, Any]]) -> set:
                     paths.add(p)
             continue
         cid = str(msg.get("tool_call_id") or msg.get("call_id") or "")
-        if tool_name_by_call_id.get(cid) == "image_generate":
+        tool_name = tool_name_by_call_id.get(cid)
+        if tool_name == "image_generate":
             try:
                 payload = json.loads(content)
             except Exception:
@@ -1246,6 +1339,10 @@ def _collect_history_media_paths(agent_history: List[Dict[str, Any]]) -> set:
                     if isinstance(jp, str) and jp:
                         paths.add(jp)
                         break
+            continue
+        if tool_name in ("write_file", "patch"):
+            for path in _artifact_paths_from_tool_json(content):
+                paths.add(path)
     return paths
 
 # ---------------------------------------------------------------------------
@@ -11372,6 +11469,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             _, cleaned = adapter.extract_images(cleaned)
             local_files, _ = adapter.extract_local_files(cleaned)
             local_files = BasePlatformAdapter.filter_local_delivery_paths(local_files)
+            # Avoid double-sending the same file when both MEDIA: and a bare
+            # path mention it (common after auto-append + model prose).
+            _media_path_set = {p for p, _ in media_files}
+            local_files = [p for p in local_files if p not in _media_path_set]
 
             _thread_meta = self._thread_metadata_for_source(event.source, self._reply_anchor_for_event(event))
 
@@ -16427,21 +16528,26 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # also the sole guard on the fallback branch taken when mid-run
             # context compression shrinks the message list below the original
             # history length, preserving the compression-safe behaviour of #160.
-            if "MEDIA:" not in final_response:
-                media_tags, has_voice_directive = _collect_auto_append_media_tags(
-                    result.get("messages", []),
-                    history_offset=len(agent_history),
-                    history_media_paths=_history_media_paths,
-                )
+            # Always merge missing producer-tool MEDIA tags (TTS, image gen,
+            # artifact write_file/patch). Do not short-circuit when the reply
+            # already contains an unrelated MEDIA: path — that used to drop
+            # newly written reports when TTS already attached audio.
+            media_tags, has_voice_directive = _collect_auto_append_media_tags(
+                result.get("messages", []),
+                history_offset=len(agent_history),
+                history_media_paths=_history_media_paths,
+            )
 
-                if media_tags:
-                    seen = set()
-                    unique_tags = []
-                    for tag in media_tags:
-                        if tag not in seen:
-                            seen.add(tag)
-                            unique_tags.append(tag)
-                    if has_voice_directive:
+            if media_tags:
+                seen = set()
+                unique_tags = []
+                for tag in media_tags:
+                    if tag in seen or tag in final_response:
+                        continue
+                    seen.add(tag)
+                    unique_tags.append(tag)
+                if unique_tags:
+                    if has_voice_directive and "[[audio_as_voice]]" not in final_response:
                         unique_tags.insert(0, "[[audio_as_voice]]")
                     final_response = final_response + "\n" + "\n".join(unique_tags)
             

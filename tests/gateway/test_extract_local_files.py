@@ -225,6 +225,16 @@ class TestCodeBlockExclusion:
         assert paths == []
         assert "`/tmp/image.png`" in cleaned
 
+    def test_workspace_artifact_inline_code_still_matched(self):
+        """Backticked /workspace/artifacts paths must still attach on messaging."""
+        text = "Report saved to `/workspace/artifacts/azu-mangala-business-report.md`."
+        paths, cleaned = _extract(
+            text,
+            existing_files={"/workspace/artifacts/azu-mangala-business-report.md"},
+        )
+        assert paths == ["/workspace/artifacts/azu-mangala-business-report.md"]
+        assert "/workspace/artifacts/azu-mangala-business-report.md" not in cleaned
+
     def test_path_outside_code_block_still_matched(self):
         text = (
             "```\ncode: /tmp/inside.png\n```\n"

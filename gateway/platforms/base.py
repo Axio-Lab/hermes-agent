@@ -3391,11 +3391,26 @@ class BasePlatformAdapter(ABC):
             re.IGNORECASE,
         )
 
-        # Build spans covered by fenced code blocks and inline code
+        # Build spans covered by fenced code blocks and inline code.
+        # Exception: inline code that is *only* a ``/workspace/artifacts/...``
+        # (or ``*/artifacts/...`` absolute) deliverable path is NOT masked —
+        # models commonly backtick those paths, which previously blocked
+        # native messaging attachment and left users with a useless container
+        # path string.
         code_spans: list = []
         for m in re.finditer(r'```[^\n]*\n.*?```', content, re.DOTALL):
             code_spans.append((m.start(), m.end()))
+        artifact_inline_re = re.compile(
+            r'`((?:~/|/|[A-Za-z]:[/\\])(?:[\w.\-]+[/\\])*artifacts[/\\]'
+            r'(?:[\w.\-]+[/\\])*[\w.\-]+\.(?:' + ext_part + r'))`',
+            re.IGNORECASE,
+        )
+        artifact_inline_spans = {
+            (m.start(), m.end()) for m in artifact_inline_re.finditer(content)
+        }
         for m in re.finditer(r'`[^`\n]+`', content):
+            if (m.start(), m.end()) in artifact_inline_spans:
+                continue
             code_spans.append((m.start(), m.end()))
 
         def _in_code(pos: int) -> bool:
@@ -3435,6 +3450,8 @@ class BasePlatformAdapter(ABC):
         if unique:
             for raw, _exp in unique:
                 cleaned = cleaned.replace(raw, '')
+            # Drop empty leftover backticks around extracted artifact paths.
+            cleaned = re.sub(r'`\s*`', '', cleaned)
             cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
 
         return paths, cleaned
@@ -4557,6 +4574,8 @@ class BasePlatformAdapter(ABC):
                     # instead of becoming native uploads.
                     local_files, text_content = self.extract_local_files(text_content)
                     local_files = self.filter_local_delivery_paths(local_files)
+                    _media_path_set = {p for p, _ in media_files}
+                    local_files = [p for p in local_files if p not in _media_path_set]
                     if local_files:
                         logger.info("[%s] extract_local_files found %d file(s) in response", self.name, len(local_files))
 
