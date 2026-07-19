@@ -128,6 +128,52 @@ def test_circuit_breaker_half_opens_after_cooldown(monkeypatch, tmp_path):
         _cleanup(mcp_tool, "srv")
 
 
+def test_composio_multi_execute_string_tools_does_not_trip_breaker(monkeypatch, tmp_path):
+    """A model argument-shape bug must not poison the Composio MCP server.
+
+    Gateway sessions can occasionally stringify the COMPOSIO_MULTI_EXECUTE_TOOL
+    ``tools`` array when the payload contains long Google Docs markdown. That
+    is a retryable model-call error, not a Composio transport failure, so it
+    should be rejected before ``session.call_tool`` and before the circuit
+    breaker counter increments.
+    """
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    from tools import mcp_tool
+    from tools.mcp_tool import _make_tool_handler
+
+    call_count = {"n": 0}
+
+    async def _call_tool_unused(*a, **kw):
+        call_count["n"] += 1
+        result = MagicMock()
+        result.isError = False
+        result.content = []
+        result.structuredContent = None
+        return result
+
+    _install_stub_server(mcp_tool, "composio", _call_tool_unused)
+    mcp_tool._ensure_mcp_loop()
+
+    try:
+        handler = _make_tool_handler("composio", "COMPOSIO_MULTI_EXECUTE_TOOL", 10.0)
+        result = handler({
+            "tools": (
+                '[{"tool_slug":"GOOGLEDOCS_UPDATE_DOCUMENT_MARKDOWN",'
+                '"arguments":{"markdown":"# Big doc"}}]'
+            )
+        })
+        parsed = json.loads(result)
+        assert parsed["retryable"] is True
+        assert parsed["bad_argument"] == "tools"
+        assert "native JSON array" in parsed["error"]
+        assert "Do not say Composio is unavailable" in parsed["error"]
+        assert call_count["n"] == 0
+        assert mcp_tool._server_error_counts.get("composio", 0) == 0
+    finally:
+        _cleanup(mcp_tool, "composio")
+
+
 def test_circuit_breaker_reopens_on_probe_failure(monkeypatch, tmp_path):
     """If the half-open probe fails, the breaker must re-arm the
     cooldown (not let every subsequent call through).

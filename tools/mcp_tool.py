@@ -2999,6 +2999,50 @@ def _interrupted_call_result() -> str:
     }, ensure_ascii=False)
 
 
+def _validate_composio_multi_execute_shape(
+    server_name: str,
+    tool_name: str,
+    args: dict,
+) -> str | None:
+    """Reject malformed Composio batch calls before they hit the MCP server.
+
+    Open-weight models sometimes stringify the ``tools`` array when updating
+    long Google Docs content. Composio returns a validation error for that, and
+    repeated validation failures trip Hermes' MCP circuit breaker, making the
+    gateway incorrectly report that Composio is unavailable. This preflight
+    turns the mistake into a model-correctable tool error without counting it
+    as a server failure.
+    """
+    if server_name != "composio" or tool_name != "COMPOSIO_MULTI_EXECUTE_TOOL":
+        return None
+    if not isinstance(args, dict):
+        return None
+    tools = args.get("tools")
+    if not isinstance(tools, str):
+        return None
+
+    preview = tools.strip().replace("\n", "\\n")
+    if len(preview) > 240:
+        preview = preview[:237] + "..."
+    return json.dumps(
+        {
+            "error": (
+                "Invalid Composio call shape: COMPOSIO_MULTI_EXECUTE_TOOL.tools "
+                "must be a native JSON array of objects, not a string. Retry the "
+                "same operation by passing tools as an actual array. For Google "
+                "Docs or long markdown, split the content into smaller chunks and "
+                "call one chunk per Composio execute request. Do not say Composio "
+                "is unavailable; this was an argument-shape error."
+            ),
+            "retryable": True,
+            "bad_argument": "tools",
+            "received_type": "string",
+            "received_preview": preview,
+        },
+        ensure_ascii=False,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Config loading
 # ---------------------------------------------------------------------------
@@ -3123,6 +3167,12 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
     """
 
     def _handler(args: dict, **kwargs) -> str:
+        composio_shape_error = _validate_composio_multi_execute_shape(
+            server_name, tool_name, args
+        )
+        if composio_shape_error is not None:
+            return composio_shape_error
+
         # Circuit breaker: if this server has failed too many times
         # consecutively, short-circuit with a clear message so the model
         # stops retrying and uses alternative approaches (#10447).
