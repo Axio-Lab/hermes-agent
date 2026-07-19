@@ -312,6 +312,47 @@ class TestCoerceToolArgs:
             result = coerce_tool_args("test_tool", args)
             assert result["items"] == ["not-json"]
 
+    def test_lenient_parse_composio_tools_with_raw_newlines_in_markdown(self):
+        """Raw newlines inside stringified COMPOSIO tools JSON should still parse."""
+        schema = self._mock_schema({
+            "tools": {
+                "type": "array",
+                "items": {"type": "object"},
+            },
+        })
+        markdown = "# Title\n\nLine with \"quotes\" and body."
+        # Model left literal newlines inside the JSON string value.
+        raw = (
+            '[{"tool_slug":"GOOGLEDOCS_UPDATE_DOCUMENT_MARKDOWN",'
+            '"arguments":{"document_id":"doc123","markdown":"'
+            + markdown.replace("\\", "\\\\").replace('"', '\\"')
+            + '"}}]'
+        )
+        # Ensure the payload really contains raw newlines (not \\n escapes only).
+        assert "\n" in raw
+        with patch("model_tools.registry.get_schema", return_value=schema):
+            result = coerce_tool_args("mcp_composio_COMPOSIO_MULTI_EXECUTE_TOOL", {"tools": raw})
+        assert isinstance(result["tools"], list)
+        assert result["tools"][0]["tool_slug"] == "GOOGLEDOCS_UPDATE_DOCUMENT_MARKDOWN"
+        assert "Title" in result["tools"][0]["arguments"]["markdown"]
+
+    def test_unparseable_composio_tools_array_not_wrapped_as_string(self):
+        """Broken object-array JSON must not become tools[0]=string."""
+        schema = self._mock_schema({
+            "tools": {
+                "type": "array",
+                "items": {"type": "object"},
+            },
+        })
+        # Unescaped quote inside markdown breaks JSON even after control escape.
+        broken = (
+            '[{"tool_slug":"GOOGLEDOCS_UPDATE_DOCUMENT_MARKDOWN",'
+            '"arguments":{"document_id":"doc123","markdown":"He said "hello" then end"}}]'
+        )
+        with patch("model_tools.registry.get_schema", return_value=schema):
+            result = coerce_tool_args("mcp_composio_COMPOSIO_MULTI_EXECUTE_TOOL", {"tools": broken})
+        assert result["tools"] == broken
+
     def test_bare_string_wrapped_as_array(self):
         """Bare string on array field → single-element list."""
         schema = self._mock_schema({"urls": {"type": "array", "items": {"type": "string"}}})

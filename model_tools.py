@@ -691,9 +691,38 @@ def coerce_tool_args(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
                     # nullable "null" → None).
                     args[key] = coerced
                     continue
-                # If the string looks like a JSON array but _coerce_value
-                # failed to parse it, warn clearly instead of silently wrapping.
-                if value.strip().startswith("["):
+                # Lenient repair for LLM JSON with raw newlines inside strings
+                # (common when stuffing Markdown into COMPOSIO_MULTI_EXECUTE_TOOL).
+                repaired = _coerce_json_lenient(value, list)
+                if repaired is not value and isinstance(repaired, list):
+                    args[key] = repaired
+                    continue
+                # If the string looks like a JSON array but still cannot be
+                # parsed, avoid wrapping object-array fields as ``[string]`` —
+                # Composio then rejects with "Expected object, received string
+                # at tools[0]". Leave the value unchanged so the tool error
+                # asks the model to retry with native structured args / chunks.
+                items_schema = prop_schema.get("items") if isinstance(prop_schema, dict) else None
+                items_type = items_schema.get("type") if isinstance(items_schema, dict) else None
+                looks_like_json_array = value.strip().startswith("[")
+                object_items = items_type == "object" or (
+                    isinstance(items_type, list) and "object" in items_type
+                )
+                composio_tools_field = (
+                    key == "tools"
+                    and "COMPOSIO_MULTI_EXECUTE_TOOL" in tool_name
+                )
+                if looks_like_json_array and (object_items or composio_tools_field):
+                    logger.warning(
+                        "coerce_tool_args: %s.%s looks like a JSON array of "
+                        "objects but could not be parsed (often unescaped "
+                        "quotes/newlines in large markdown). Not wrapping as "
+                        "a string element — retry with native array args or "
+                        "smaller chunks.",
+                        tool_name, key,
+                    )
+                    continue
+                if looks_like_json_array:
                     logger.warning(
                         "coerce_tool_args: %s.%s looks like a JSON array string "
                         "but could not be parsed — model may have emitted a "
@@ -778,6 +807,46 @@ def _schema_allows_null(schema: dict | None) -> bool:
     return False
 
 
+def _escape_raw_controls_in_json_strings(value: str) -> str:
+    """Escape raw control characters that appear inside JSON double-quoted strings.
+
+    Models often embed Markdown with literal newlines into a stringified tool
+    argument. Strict ``json.loads`` rejects those as invalid control characters;
+    escaping them restores a parseable payload without changing string content.
+    """
+    out: list[str] = []
+    in_string = False
+    escape = False
+    for ch in value:
+        if escape:
+            out.append(ch)
+            escape = False
+            continue
+        if ch == "\\" and in_string:
+            out.append(ch)
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            out.append(ch)
+            continue
+        if in_string:
+            if ch == "\n":
+                out.append("\\n")
+                continue
+            if ch == "\r":
+                out.append("\\r")
+                continue
+            if ch == "\t":
+                out.append("\\t")
+                continue
+            if ord(ch) < 32:
+                out.append(f"\\u{ord(ch):04x}")
+                continue
+        out.append(ch)
+    return "".join(out)
+
+
 def _coerce_json(value: str, expected_python_type: type):
     """Parse *value* as JSON when the schema expects an array or object.
 
@@ -806,6 +875,32 @@ def _coerce_json(value: str, expected_python_type: type):
         type(parsed).__name__,
         expected_python_type.__name__,
     )
+    return value
+
+
+def _coerce_json_lenient(value: str, expected_python_type: type):
+    """Like ``_coerce_json`` but first escapes raw controls inside JSON strings."""
+    if not isinstance(value, str) or not value.strip():
+        return value
+    repaired = _escape_raw_controls_in_json_strings(value)
+    if repaired == value:
+        return value
+    try:
+        parsed = json.loads(repaired)
+    except (ValueError, TypeError):
+        return value
+    if isinstance(parsed, expected_python_type):
+        logger.info(
+            "coerce_tool_args: lenient-parsed string to %s after escaping raw controls",
+            expected_python_type.__name__,
+        )
+        return parsed
+    # Single tool object accidentally emitted without array brackets.
+    if expected_python_type is list and isinstance(parsed, dict):
+        logger.info(
+            "coerce_tool_args: wrapped lenient-parsed object into a one-element list"
+        )
+        return [parsed]
     return value
 
 
