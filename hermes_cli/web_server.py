@@ -9639,6 +9639,22 @@ async def reload_mcp_servers(profile: Optional[str] = None):
                         "Failed to refresh live session system prompts after MCP reload",
                         exc_info=True,
                     )
+
+            # Dashboard and messaging gateway are separate processes. Signal
+            # the shared gateway so every messaging platform (Telegram,
+            # WhatsApp, Slack, Discord, …) rediscovers mcp_composio_* tools
+            # and Connected Apps context instead of keeping a stale registry.
+            gateway_reload_requested = False
+            try:
+                from tools.mcp_reload_signal import request_gateway_mcp_reload
+
+                request_gateway_mcp_reload()
+                gateway_reload_requested = True
+            except Exception:
+                _log.warning(
+                    "Failed to signal messaging gateway for MCP reload",
+                    exc_info=True,
+                )
         return {
             "ok": True,
             "toolCount": len(tools),
@@ -9646,6 +9662,7 @@ async def reload_mcp_servers(profile: Optional[str] = None):
             "refreshedSessions": refreshed_sessions,
             "refreshFailures": refresh_failures,
             "promptsRefreshed": prompts_refreshed,
+            "gatewayReloadRequested": gateway_reload_requested,
         }
     except Exception as exc:
         _log.exception("POST /api/mcp/reload failed")

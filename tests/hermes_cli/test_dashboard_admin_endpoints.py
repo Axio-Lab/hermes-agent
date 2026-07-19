@@ -134,6 +134,12 @@ class TestMcpEndpoints:
             lambda: calls.append("prompts") or 1,
         )
 
+        signal_calls = []
+        monkeypatch.setattr(
+            "tools.mcp_reload_signal.request_gateway_mcp_reload",
+            lambda: signal_calls.append("gateway") or None,
+        )
+
         try:
             response = self.client.post("/api/mcp/reload")
         finally:
@@ -146,6 +152,8 @@ class TestMcpEndpoints:
         assert body["refreshedSessions"] == 1
         assert body["refreshFailures"] == 0
         assert body["promptsRefreshed"] == 1
+        assert body["gatewayReloadRequested"] is True
+        assert signal_calls == ["gateway"]
         assert calls[0] == "shutdown"
         assert calls[1][0] == "refresh"
         assert calls[1][1] is agent

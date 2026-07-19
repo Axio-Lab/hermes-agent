@@ -6122,6 +6122,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # idle case where the subagent finishes with no agent turn running.
         asyncio.create_task(self._async_delegation_watcher())
 
+        # Pick up Verxio/dashboard MCP soft-reloads (Composio connect, etc.).
+        # Dashboard ``POST /api/mcp/reload`` only refreshes the TUI process;
+        # this watcher consumes ``{HERMES_HOME}/mcp_reload.request`` so
+        # Telegram and other messaging platforms see the same tools.
+        asyncio.create_task(self._mcp_reload_signal_watcher())
+
         logger.info("Press Ctrl+C to stop")
         
         return True
@@ -12199,12 +12205,38 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
 
 
-    async def _execute_mcp_reload(self, event: MessageEvent) -> str:
+    async def _mcp_reload_signal_watcher(self, interval: float = 1.0) -> None:
+        """Apply dashboard/Verxio MCP soft-reloads for every messaging platform.
+
+        One gateway process hosts Telegram, WhatsApp, Slack, Discord, etc.
+        Reloading here refreshes Composio/MCP tools and Connected Apps prompts
+        for all of those adapters at once.
+        """
+        from tools.mcp_reload_signal import consume_gateway_mcp_reload_request
+
+        while self._running:
+            try:
+                if consume_gateway_mcp_reload_request():
+                    summary = await self._execute_mcp_reload(event=None)
+                    logger.info(
+                        "Applied cross-process MCP reload for all messaging platforms: %s",
+                        summary,
+                    )
+            except Exception as exc:
+                logger.warning("MCP reload signal watcher failed: %s", exc)
+            await asyncio.sleep(interval)
+
+    async def _execute_mcp_reload(self, event: Optional[MessageEvent] = None) -> str:
         """Actually disconnect, reconnect, and notify MCP tool changes.
 
         Split out from ``_handle_reload_mcp_command`` so the confirmation
         wrapper can invoke the same path whether the user confirmed via
         button, text reply, or has the confirm gate disabled.
+
+        ``event`` may be ``None`` for silent cross-process reloads requested
+        by the dashboard (Verxio Composio soft-reload). In that case we still
+        rediscover tools, refresh cached agents, and refresh the Connected
+        Apps system prompt, but skip per-chat transcript notices.
         """
         loop = asyncio.get_running_loop()
         try:
@@ -12228,6 +12260,16 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             added = connected_servers - old_servers
             removed = old_servers - connected_servers
             reconnected = connected_servers & old_servers
+
+            # Dashboard/Verxio also rewrite agent.system_prompt (Connected Apps).
+            # Gateway freezes that prompt at init — refresh it with the tools.
+            try:
+                self._ephemeral_system_prompt = self._load_ephemeral_system_prompt()
+            except Exception as prompt_exc:
+                logger.debug(
+                    "Failed to refresh ephemeral system prompt after MCP reload: %s",
+                    prompt_exc,
+                )
 
             lines = [t("gateway.reload_mcp.header")]
             if reconnected:
@@ -12270,15 +12312,25 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                             # deliberately locked down. (Contract is asserted by
                             # test_reload_mcp_preserves_per_agent_toolset_overrides.)
                             refresh_agent_mcp_tools(_agent, quiet_mode=True)
+                            # Keep Connected Apps / system prompt in sync with
+                            # the gateway-level ephemeral prompt we just reloaded.
+                            try:
+                                _agent.ephemeral_system_prompt = (
+                                    self._ephemeral_system_prompt or None
+                                )
+                            except Exception:
+                                pass
             except Exception as _exc:
                 logger.debug(
                     "Failed to update cached agent tools after MCP reload: %s",
                     _exc,
                 )
 
-            # Inject a message at the END of the session history so the
-            # model knows tools changed on its next turn.  Appended after
-            # all existing messages to preserve prompt-cache for the prefix.
+            # Inject a message at the END of session history so the model
+            # knows tools changed on its next turn. For interactive
+            # /reload-mcp, notify the requesting chat. For silent
+            # dashboard/Verxio reloads, notify every live gateway session
+            # (Telegram, WhatsApp, Slack, Discord, …) that has a cached agent.
             change_parts = []
             if added:
                 change_parts.append(f"Added servers: {', '.join(sorted(added))}")
@@ -12290,13 +12342,33 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             change_detail = ". ".join(change_parts) + ". " if change_parts else ""
             reload_msg = {
                 "role": "user",
-                "content": f"[IMPORTANT: MCP servers have been reloaded. {change_detail}{tool_summary}. The tool list for this conversation has been updated accordingly.]",
+                "content": (
+                    f"[IMPORTANT: MCP servers have been reloaded. {change_detail}"
+                    f"{tool_summary}. Connected Apps / Composio tools are available "
+                    f"on this messaging channel. The tool list for this conversation "
+                    f"has been updated accordingly.]"
+                ),
             }
             try:
-                session_entry = self.session_store.get_or_create_session(event.source)
-                self.session_store.append_to_transcript(
-                    session_entry.session_id, reload_msg
-                )
+                if event is not None:
+                    session_entry = self.session_store.get_or_create_session(event.source)
+                    self.session_store.append_to_transcript(
+                        session_entry.session_id, reload_msg
+                    )
+                else:
+                    _cache = getattr(self, "_agent_cache", None) or {}
+                    _store = getattr(self, "session_store", None)
+                    _entries = getattr(_store, "_entries", None) if _store else None
+                    if isinstance(_entries, dict):
+                        for _sess_key in list(_cache.keys()):
+                            _entry = _entries.get(_sess_key)
+                            _sid = getattr(_entry, "session_id", None) if _entry else None
+                            if not _sid:
+                                continue
+                            try:
+                                self.session_store.append_to_transcript(_sid, reload_msg)
+                            except Exception:
+                                continue
             except Exception:
                 pass  # Best-effort; don't fail the reload over a transcript write
 
