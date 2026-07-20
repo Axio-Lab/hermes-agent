@@ -1,0 +1,7 @@
+name: google
+version: 1.0.0
+description: "Google Gemini Nano Banana image generation (gemini-3.1-flash-image / gemini-3-pro-image) via GOOGLE_API_KEY or GEMINI_API_KEY."
+author: Axio Lab
+kind: backend
+requires_env:
+  - GOOGLE_API_KEY

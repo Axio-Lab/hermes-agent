@@ -551,11 +551,15 @@ _SCHEMA_OVERRIDES: Dict[str, Dict[str, Any]] = {
     "image_gen.provider": {
         "type": "select",
         "description": "Image generation provider (text-to-image / image editing)",
-        "options": ["fal", "openai", "openai-codex", "xai", "krea", "dashscope"],
+        "options": ["fal", "openai", "openai-codex", "xai", "krea", "dashscope", "google"],
     },
     "image_gen.model": {
         "type": "string",
-        "description": "Image generation model id for the active provider",
+        "description": (
+            "Image generation model id for the active provider "
+            "(e.g. nano-banana / nano-banana-pro for Google, "
+            "gpt-image-2-medium for OpenAI, qwen-image-2.0-pro for DashScope)"
+        ),
     },
     "video_gen.provider": {
         "type": "select",
@@ -12024,6 +12028,19 @@ async def get_toolset_config(name: str, profile: Optional[str] = None):
         providers = []
         active_provider = None
         if cat:
+            # Some providers accept aliased env keys (e.g. Google image gen
+            # takes GOOGLE_API_KEY or GEMINI_API_KEY). Treat any alias as set.
+            _ENV_ALIASES = {
+                "GOOGLE_API_KEY": ("GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_GENAI_API_KEY"),
+                "GEMINI_API_KEY": ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_API_KEY"),
+            }
+
+            def _env_is_set(key: str) -> bool:
+                for candidate in _ENV_ALIASES.get(key, (key,)):
+                    if get_env_value(candidate):
+                        return True
+                return False
+
             for prov in _visible_providers(cat, config, force_fresh=True):
                 env_vars = [
                     {
@@ -12031,7 +12048,7 @@ async def get_toolset_config(name: str, profile: Optional[str] = None):
                         "prompt": e.get("prompt", e["key"]),
                         "url": e.get("url"),
                         "default": e.get("default"),
-                        "is_set": bool(get_env_value(e["key"])),
+                        "is_set": _env_is_set(e["key"]),
                     }
                     for e in prov.get("env_vars", [])
                 ]

@@ -2968,6 +2968,8 @@ def apply_provider_selection(ts_key: str, provider_name: str, config: dict) -> N
         img_cfg["use_gateway"] = bool(managed_feature)
         if plugin_name == "dashscope" and not img_cfg.get("model"):
             img_cfg["model"] = "qwen-image-2.0-pro"
+        if plugin_name == "google" and not img_cfg.get("model"):
+            img_cfg["model"] = "nano-banana"
         if plugin_name == "openai" and not img_cfg.get("model"):
             img_cfg["model"] = "gpt-image-2-medium"
 
