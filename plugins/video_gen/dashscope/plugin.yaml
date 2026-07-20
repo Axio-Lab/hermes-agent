@@ -1,0 +1,7 @@
+name: dashscope
+version: 1.0.0
+description: "Alibaba DashScope / Qwen Cloud video generation — HappyHorse & Wan text-to-video / image-to-video via DASHSCOPE_API_KEY."
+author: Axio Lab
+kind: backend
+requires_env:
+  - DASHSCOPE_API_KEY
