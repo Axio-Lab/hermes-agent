@@ -1406,10 +1406,17 @@ def _dispatch_to_plugin_provider(
         _ensure_plugins_discovered()
         if configured:
             provider = get_provider(configured)
-        else:
-            # Verxio often loses ``image_gen.provider`` from config.yaml.
-            # Prefer any ready plugin (DashScope/Google/OpenAI/…) over the
-            # in-tree FAL path that only understands FAL_KEY.
+            # Stale ``fal`` (or any unavailable explicit choice) must not skip
+            # DashScope and fall through to the in-tree FAL_KEY error path.
+            if provider is not None:
+                try:
+                    if not provider.is_available():
+                        provider = None
+                except Exception:
+                    provider = None
+        if provider is None:
+            # Verxio often loses ``image_gen.provider`` from config.yaml, or
+            # keeps a dead FAL selection. Prefer any ready plugin over in-tree FAL.
             provider = get_active_provider()
             if provider is not None:
                 configured = provider.name
@@ -1428,7 +1435,9 @@ def _dispatch_to_plugin_provider(
             # backend was patched in or before config changed. Retry once with
             # a forced refresh before surfacing a missing-provider error.
             _ensure_plugins_discovered(force=True)
-            provider = get_provider(configured)
+            provider = get_active_provider() or get_provider(configured)
+            if provider is not None:
+                configured = provider.name
         except Exception as exc:
             logger.debug("image_gen plugin force-refresh skipped: %s", exc)
 

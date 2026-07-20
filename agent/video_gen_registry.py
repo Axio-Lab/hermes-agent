@@ -78,6 +78,14 @@ def get_active_provider() -> Optional[VideoGenProvider]:
 
     Reads ``video_gen.provider`` from config.yaml; falls back per the
     module docstring.
+
+    Availability semantics
+    ----------------------
+    - When the configured provider is registered **and available**, use it.
+    - When it is missing, unavailable (e.g. stale ``fal`` without ``FAL_KEY``),
+      or config is null, prefer an available DashScope backend — Verxio ships
+      Qwen Cloud media by default and ``video_gen`` is often wiped by corrupt
+      config rewrites.
     """
     configured: Optional[str] = None
     try:
@@ -95,29 +103,45 @@ def get_active_provider() -> Optional[VideoGenProvider]:
     with _lock:
         snapshot = dict(_providers)
 
+    def _is_available_safe(provider: VideoGenProvider) -> bool:
+        try:
+            return bool(provider.is_available())
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "video_gen provider %s.is_available() raised %s",
+                getattr(provider, "name", "?"),
+                exc,
+            )
+            return False
+
     if configured:
         provider = snapshot.get(configured)
-        if provider is not None:
+        if provider is not None and _is_available_safe(provider):
             return provider
-        logger.debug(
-            "video_gen.provider='%s' configured but not registered; falling back",
-            configured,
-        )
+        if provider is not None:
+            logger.debug(
+                "video_gen.provider='%s' is registered but unavailable; falling back",
+                configured,
+            )
+        else:
+            logger.debug(
+                "video_gen.provider='%s' configured but not registered; falling back",
+                configured,
+            )
 
-    # Fallback: single-provider case
-    if len(snapshot) == 1:
-        return next(iter(snapshot.values()))
+    available = [p for p in snapshot.values() if _is_available_safe(p)]
 
-    # Prefer an available DashScope backend when nothing is configured —
-    # Verxio ships Qwen Cloud media by default and config.yaml often has
-    # ``video_gen: null`` after corrupt rewrites.
+    # Fallback: single available provider
+    if len(available) == 1:
+        return available[0]
+
+    # Prefer DashScope when config is unset/stale — do not stick on dead FAL.
     dashscope = snapshot.get("dashscope")
-    if dashscope is not None:
-        try:
-            if dashscope.is_available():
-                return dashscope
-        except Exception as exc:
-            logger.debug("dashscope availability check failed: %s", exc)
+    if dashscope is not None and _is_available_safe(dashscope):
+        return dashscope
+
+    if available:
+        return available[0]
 
     return None
 

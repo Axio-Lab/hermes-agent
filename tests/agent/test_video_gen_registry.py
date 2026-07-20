@@ -78,15 +78,23 @@ class TestGetActiveProvider:
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
         assert video_gen_registry.get_active_provider() is None
 
-    def test_multi_without_config_returns_none(self, tmp_path, monkeypatch):
-        """Unlike image_gen (which falls back to 'fal'), video_gen has no
-        legacy default — when there are multiple providers and no config,
-        the registry returns None and the tool surfaces a helpful error.
+    def test_multi_without_config_prefers_available(self, tmp_path, monkeypatch):
+        """With multiple available providers and no config, pick a ready one
+        (stable first-available order when DashScope is absent).
         """
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
         video_gen_registry.register_provider(_FakeProvider("xai"))
         video_gen_registry.register_provider(_FakeProvider("fal"))
-        assert video_gen_registry.get_active_provider() is None
+        active = video_gen_registry.get_active_provider()
+        assert active is not None and active.name in {"xai", "fal"}
+
+    def test_multi_without_config_prefers_dashscope(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        video_gen_registry.register_provider(_FakeProvider("xai"))
+        video_gen_registry.register_provider(_FakeProvider("fal"))
+        video_gen_registry.register_provider(_FakeProvider("dashscope"))
+        active = video_gen_registry.get_active_provider()
+        assert active is not None and active.name == "dashscope"
 
     def test_config_selects_provider(self, tmp_path, monkeypatch):
         import yaml
@@ -99,6 +107,18 @@ class TestGetActiveProvider:
         video_gen_registry.register_provider(_FakeProvider("fal"))
         active = video_gen_registry.get_active_provider()
         assert active is not None and active.name == "fal"
+
+    def test_unavailable_configured_fal_falls_back_to_dashscope(self, tmp_path, monkeypatch):
+        import yaml
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        (tmp_path / "config.yaml").write_text(
+            yaml.safe_dump({"video_gen": {"provider": "fal"}})
+        )
+        video_gen_registry.register_provider(_FakeProvider("fal", available=False))
+        video_gen_registry.register_provider(_FakeProvider("dashscope"))
+        active = video_gen_registry.get_active_provider()
+        assert active is not None and active.name == "dashscope"
 
     def test_unknown_config_falls_back(self, tmp_path, monkeypatch):
         """If video_gen.provider names a provider that isn't registered,

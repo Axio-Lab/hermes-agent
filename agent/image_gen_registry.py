@@ -113,17 +113,22 @@ def get_active_provider() -> Optional[ImageGenProvider]:
             logger.debug("image_gen provider %s.is_available() raised %s", p.name, exc)
             return False
 
-    # 1. Explicit config wins — return regardless of is_available() so the
-    #    user gets a precise downstream error message rather than a silent
-    #    backend switch.
+    # 1. Explicit config wins when that backend is actually available.
+    #    Stale ``fal`` without FAL_KEY must not block DashScope on Verxio.
     if configured:
         provider = snapshot.get(configured)
-        if provider is not None:
+        if provider is not None and _is_available_safe(provider):
             return provider
-        logger.debug(
-            "image_gen.provider='%s' configured but not registered; falling back",
-            configured,
-        )
+        if provider is not None:
+            logger.debug(
+                "image_gen.provider='%s' is registered but unavailable; falling back",
+                configured,
+            )
+        else:
+            logger.debug(
+                "image_gen.provider='%s' configured but not registered; falling back",
+                configured,
+            )
 
     # 2. Fallback: single registered provider — but only if it's actually
     #    available (no credentials = don't surface it as "active").

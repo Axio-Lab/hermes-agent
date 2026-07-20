@@ -84,12 +84,49 @@ class _ImageOnlyProvider(VideoGenProvider):
 
 
 class TestDynamicSchemaBuilder:
-    def test_no_config_says_so(self, cfg_home):
+    def test_no_config_and_no_provider_says_unavailable(self, cfg_home):
         from tools.video_generation_tool import _build_dynamic_video_schema
 
         desc = _build_dynamic_video_schema()["description"]
-        assert "No video backend is configured" in desc
-        assert "hermes tools" in desc
+        assert "No video backend is available" in desc
+        assert "DashScope" in desc or "DASHSCOPE_API_KEY" in desc
+
+    def test_no_config_uses_available_dashscope_fallback(self, cfg_home):
+        from tools.video_generation_tool import _build_dynamic_video_schema
+
+        class _Dash(VideoGenProvider):
+            @property
+            def name(self) -> str:
+                return "dashscope"
+
+            def is_available(self) -> bool:
+                return True
+
+            def list_models(self):
+                return [{"id": "happyhorse-1.1", "modalities": ["text", "image"]}]
+
+            def default_model(self):
+                return "happyhorse-1.1"
+
+            def capabilities(self):
+                return {"modalities": ["text", "image"]}
+
+            def generate(self, prompt, **kwargs):
+                return {"success": True}
+
+        video_gen_registry.register_provider(_Dash())
+        import hermes_cli.plugins as plugins_module
+
+        saved = plugins_module._ensure_plugins_discovered
+        plugins_module._ensure_plugins_discovered = lambda *a, **k: None
+        try:
+            desc = _build_dynamic_video_schema()["description"]
+        finally:
+            plugins_module._ensure_plugins_discovered = saved
+
+        assert "Active backend: Dashscope" in desc  # VideoGenProvider.display_name title-cases name
+        assert "No video backend is available" not in desc
+        assert "ffmpeg" in desc.lower()
 
     def test_does_not_mention_edit_or_extend(self, cfg_home):
         """The simplified surface only does text→video and image→video.

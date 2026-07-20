@@ -247,18 +247,20 @@ def _resolve_active_provider():
 def _missing_provider_error(configured: Optional[str]) -> str:
     if configured:
         msg = (
-            f"video_gen.provider='{configured}' is set but no plugin "
-            f"registered that name. Run `hermes plugins list` to see "
-            f"installed video gen backends, or `hermes tools` → Video "
-            f"Generation to pick one."
+            f"video_gen.provider='{configured}' is set but that backend is "
+            f"not available (missing plugin or API key). In Verxio, open "
+            f"Skills → Toolsets → Video Generation and pick DashScope "
+            f"(uses DASHSCOPE_API_KEY) or another configured provider. "
+            f"Do not require FAL_KEY unless FAL is the selected provider."
         )
         return json.dumps(error_response(
             error=msg, error_type="provider_not_registered",
             provider=configured,
         ))
     msg = (
-        "No video generation backend is configured. Run `hermes tools` → "
-        "Video Generation to enable one (xAI, FAL, or Google Veo)."
+        "No video generation backend is available. In Verxio, open Skills → "
+        "Toolsets → Video Generation and enable DashScope (DASHSCOPE_API_KEY) "
+        "or another provider. FAL_KEY is only needed when FAL is selected."
     )
     return json.dumps(error_response(
         error=msg, error_type="no_provider_configured",
@@ -459,36 +461,23 @@ def _format_model_caveats(
 def _build_dynamic_video_schema() -> Dict[str, Any]:
     """Build a description that reflects the active backend's actual surface.
 
-    Cheap: reads config (already memoized by the caller), asks the active
-    provider for `capabilities()` and the active model's catalog entry,
-    and formats a few lines of prose. Falls back to the generic
-    description when no provider is configured or registered.
+    Cheap: resolves the active provider (config or DashScope/available
+    fallback), asks it for ``capabilities()`` / catalog metadata, and
+    formats a few lines of prose. Falls back to the generic description
+    when no backend is available.
     """
     parts: List[str] = [_GENERIC_DESCRIPTION]
 
     configured = _read_configured_video_provider()
     configured_model = _read_configured_video_model()
-
-    if not configured:
-        parts.append(
-            "\nNo video backend is configured. Calls will return an error "
-            "until the user picks one via `hermes tools` → Video Generation."
-        )
-        return {"description": "\n".join(parts)}
-
-    try:
-        from agent.video_gen_registry import get_provider
-        from hermes_cli.plugins import _ensure_plugins_discovered
-
-        _ensure_plugins_discovered()
-        provider = get_provider(configured)
-    except Exception:
-        provider = None
+    provider = _resolve_active_provider()
 
     if provider is None:
         parts.append(
-            f"\nActive backend: {configured} (plugin not yet loaded — the "
-            f"tool will retry discovery on first call)."
+            "\nNo video backend is available. Calls will return an error "
+            "until a provider is ready (Verxio: Skills → Toolsets → Video "
+            "Generation — DashScope uses DASHSCOPE_API_KEY; FAL_KEY only if "
+            "FAL is selected). Do not substitute ffmpeg or image_generate."
         )
         return {"description": "\n".join(parts)}
 
@@ -511,7 +500,13 @@ def _build_dynamic_video_schema() -> Dict[str, Any]:
     line = f"\nActive backend: {backend_label}"
     if active_model:
         line += f" · model: {active_model}"
+    if configured and configured != provider.name:
+        line += f" (resolved from unavailable '{configured}')"
     parts.append(line)
+    parts.append(
+        "- Prefer this tool for AI motion/video. Do not use ffmpeg Ken Burns "
+        "or image_generate as a substitute when this backend is available."
+    )
 
     # Model-specific caveats (the high-signal stuff)
     for c in _format_model_caveats(model_meta, caps):
