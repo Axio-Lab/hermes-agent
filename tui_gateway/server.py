@@ -5041,6 +5041,9 @@ def _(rid, params: dict) -> dict:
         "lazy": True,
         "model": "",
         "provider": "",
+        # Soft-fail resumes must still report the contract, or Desktop treats
+        # a missing field as backend v0 and shows "Backend out of date".
+        "desktop_contract": DESKTOP_BACKEND_CONTRACT,
     }
     if agent_error:
         info["credential_warning"] = agent_error
@@ -5081,6 +5084,7 @@ def _(rid, params: dict) -> dict:
         "cwd": cwd,
         "branch": _git_branch_for_cwd(cwd),
         "lazy": True,
+        "desktop_contract": DESKTOP_BACKEND_CONTRACT,
     }
     _emit("session.info", params.get("session_id", ""), info)
     return _ok(rid, info)
