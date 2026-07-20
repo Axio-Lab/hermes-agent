@@ -540,6 +540,42 @@ def test_external_oauth_disconnect_rejected_before_auth_mutation(monkeypatch):
     assert "provider's CLI" in resp.text
 
 
+def test_oauth_disconnect_clears_matching_main_model(tmp_path, monkeypatch):
+    """Disconnecting the active OAuth provider must clear the pinned main model."""
+    from hermes_cli import auth as auth_mod
+    from hermes_cli import web_server as ws
+
+    hermes_home = tmp_path / "hermes"
+    hermes_home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    (hermes_home / "config.yaml").write_text(
+        "model:\n"
+        "  default: gpt-5.3-codex\n"
+        "  provider: openai-codex\n"
+        "  base_url: https://chatgpt.com/backend-api/codex\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(auth_mod, "remove_all_provider_credentials", lambda provider_id: True)
+    monkeypatch.setattr(
+        ws,
+        "_resolve_provider_status",
+        lambda provider_id, status_fn=None: {"connected": True, "source": "auth_store"},
+    )
+    monkeypatch.setattr(ws, "_oauth_provider_disconnect_hint", lambda *a, **k: None)
+
+    resp = client.delete("/api/providers/oauth/openai-codex", headers=HEADERS)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["ok"] is True
+
+    import yaml
+
+    config = yaml.safe_load((hermes_home / "config.yaml").read_text(encoding="utf-8")) or {}
+    model_cfg = config.get("model") or {}
+    assert str(model_cfg.get("provider") or "") == ""
+    assert str(model_cfg.get("default") or model_cfg.get("name") or "") == ""
+    assert "gpt-5.3-codex" not in str(model_cfg)
+
+
 def test_env_sourced_oauth_status_is_not_disconnectable(monkeypatch):
     """An env/.env-backed Anthropic API key is removed from Keys, not OAuth Accounts."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")

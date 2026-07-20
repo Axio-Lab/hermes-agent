@@ -7178,6 +7178,59 @@ async def list_oauth_providers(profile: Optional[str] = None):
         return {"providers": providers}
 
 
+def _clear_main_model_if_provider(provider_id: str) -> bool:
+    """Clear the main model assignment when it is pinned to *provider_id*.
+
+    OAuth disconnect previously cleared credentials only, leaving config.yaml
+    still pointing at e.g. gpt-5 / openai-codex so the statusbar kept showing a
+    model that is no longer choosable in the picker.
+    """
+    target = (provider_id or "").strip().lower()
+    if not target:
+        return False
+
+    try:
+        cfg = load_config()
+    except Exception:
+        return False
+
+    model_cfg = cfg.get("model")
+    if not isinstance(model_cfg, dict):
+        return False
+
+    current = str(model_cfg.get("provider") or "").strip().lower()
+    if current != target:
+        return False
+
+    model_cfg.pop("provider", None)
+    model_cfg.pop("default", None)
+    model_cfg.pop("name", None)
+    model_cfg["base_url"] = ""
+    try:
+        clear_model_endpoint_credentials(model_cfg)
+    except Exception:
+        model_cfg.pop("api_key", None)
+        model_cfg.pop("api", None)
+
+    remaining = {
+        key: value
+        for key, value in model_cfg.items()
+        if value not in (None, "", {}, [])
+    }
+    if remaining:
+        cfg["model"] = remaining
+    else:
+        cfg.pop("model", None)
+
+    try:
+        save_config(cfg)
+    except Exception:
+        _log.exception("oauth/disconnect: failed to clear main model for %s", provider_id)
+        return False
+
+    return True
+
+
 @app.delete("/api/providers/oauth/{provider_id}")
 async def disconnect_oauth_provider(
     provider_id: str,
@@ -7229,13 +7282,24 @@ async def disconnect_oauth_provider(
                 cleared = remove_all_provider_credentials("anthropic") or cleared
             except Exception:
                 pass
-            _log.info("oauth/disconnect: %s", provider_id)
+            model_cleared = _clear_main_model_if_provider(provider_id)
+            _log.info(
+                "oauth/disconnect: %s (model_cleared=%s)",
+                provider_id,
+                model_cleared,
+            )
             return {"ok": bool(cleared), "provider": provider_id}
 
         try:
             from hermes_cli.auth import remove_all_provider_credentials
             cleared = remove_all_provider_credentials(provider_id)
-            _log.info("oauth/disconnect: %s (cleared=%s)", provider_id, cleared)
+            model_cleared = _clear_main_model_if_provider(provider_id)
+            _log.info(
+                "oauth/disconnect: %s (cleared=%s model_cleared=%s)",
+                provider_id,
+                cleared,
+                model_cleared,
+            )
             return {"ok": bool(cleared), "provider": provider_id}
         except Exception as e:
             _log.exception("disconnect %s failed", provider_id)
