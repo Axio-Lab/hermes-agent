@@ -249,16 +249,6 @@ TOOL_CATEGORIES = {
                 "tts_provider": "edge",
             },
             {
-                "name": "Nous Subscription",
-                "badge": "subscription",
-                "tag": "Managed OpenAI TTS billed to your subscription",
-                "env_vars": [],
-                "tts_provider": "openai",
-                "requires_nous_auth": True,
-                "managed_nous_feature": "tts",
-                "override_env_vars": ["VOICE_TOOLS_OPENAI_KEY", "OPENAI_API_KEY"],
-            },
-            {
                 "name": "OpenAI TTS",
                 "badge": "paid",
                 "tag": "High quality voices",
@@ -360,51 +350,20 @@ TOOL_CATEGORIES = {
         "name": "Image Generation",
         "icon": "🎨",
         # Per-provider rows for FAL.ai (`plugins/image_gen/fal`), OpenAI,
-        # OpenAI Codex, and xAI are injected at runtime from each
+        # OpenAI Codex, xAI, and DashScope are injected at runtime from each
         # ``plugins.image_gen.<vendor>`` package via
         # ``_plugin_image_gen_providers()`` in ``_visible_providers``.
-        # Only non-provider UX setup-flow rows remain here:
-        #   - "Nous Subscription" — managed FAL billed via the Nous
-        #     subscription (requires_nous_auth + override_env_vars).
-        #     Uses the fal plugin as the underlying backend but has a
-        #     distinct setup UX.
-        # Mirrors the shape browser/video_gen ship today.
-        "providers": [
-            {
-                "name": "Nous Subscription",
-                "badge": "subscription",
-                "tag": "Managed FAL image generation billed to your subscription",
-                "env_vars": [],
-                "requires_nous_auth": True,
-                "managed_nous_feature": "image_gen",
-                "override_env_vars": ["FAL_KEY"],
-                "imagegen_backend": "fal",
-            },
-        ],
+        # Verxio does not surface Nous Subscription for media toolsets.
+        "providers": [],
     },
     "video_gen": {
         "name": "Video Generation",
         "icon": "🎬",
-        # "Nous Subscription" row mirrors the image_gen pattern — managed
-        # FAL video generation billed via the Nous Portal.  Plugin-backed
-        # provider rows (FAL BYOK, xAI, …) are injected at runtime by
-        # ``_plugin_video_gen_providers()`` in ``_visible_providers``.
-        "providers": [
-            {
-                "name": "Nous Subscription",
-                "badge": "subscription",
-                "tag": "Managed FAL video generation billed to your subscription",
-                "env_vars": [],
-                "requires_nous_auth": True,
-                "managed_nous_feature": "video_gen",
-                "override_env_vars": ["FAL_KEY"],
-                # The underlying plugin backend — when the user picks
-                # "Nous Subscription" we set video_gen.provider = "fal"
-                # and video_gen.use_gateway = True so the FAL plugin
-                # routes through the managed queue gateway.
-                "video_gen_plugin_name": "fal",
-            },
-        ],
+        # Plugin-backed provider rows (DashScope, FAL BYOK, xAI, …) are
+        # injected at runtime by ``_plugin_video_gen_providers()`` in
+        # ``_visible_providers``. Verxio does not surface Nous Subscription
+        # for media toolsets.
+        "providers": [],
     },
     "x_search": {
         "name": "X (Twitter) Search",
@@ -2182,6 +2141,19 @@ def _visible_providers(
     if cat.get("name") == "Text-to-Speech":
         visible.extend(_plugin_tts_providers())
 
+    # Verxio no longer uses Nous Subscription for media toolsets — drop any
+    # leftover managed-gateway rows so the GUI/CLI never offer them.
+    if cat.get("name") in {"Image Generation", "Video Generation", "Text-to-Speech"}:
+        visible = [
+            provider
+            for provider in visible
+            if not (
+                provider.get("requires_nous_auth")
+                or provider.get("managed_nous_feature")
+                or str(provider.get("name") or "").strip().lower() == "nous subscription"
+            )
+        ]
+
     return visible
 
 
@@ -2994,6 +2966,10 @@ def apply_provider_selection(ts_key: str, provider_name: str, config: dict) -> N
             config["image_gen"] = img_cfg
         img_cfg["provider"] = plugin_name
         img_cfg["use_gateway"] = bool(managed_feature)
+        if plugin_name == "dashscope" and not img_cfg.get("model"):
+            img_cfg["model"] = "qwen-image-2.0-pro"
+        if plugin_name == "openai" and not img_cfg.get("model"):
+            img_cfg["model"] = "gpt-image-2-medium"
 
     video_plugin = provider.get("video_gen_plugin_name")
     if video_plugin:
@@ -3003,6 +2979,8 @@ def apply_provider_selection(ts_key: str, provider_name: str, config: dict) -> N
             config["video_gen"] = vid_cfg
         vid_cfg["provider"] = video_plugin
         vid_cfg["use_gateway"] = bool(managed_feature)
+        if video_plugin == "dashscope" and not vid_cfg.get("model"):
+            vid_cfg["model"] = "happyhorse-1.1"
 
     # In-tree FAL imagegen backend: keep image_gen.provider on the legacy
     # path (mirrors _configure_provider).

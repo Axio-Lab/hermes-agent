@@ -108,6 +108,17 @@ def get_active_provider() -> Optional[VideoGenProvider]:
     if len(snapshot) == 1:
         return next(iter(snapshot.values()))
 
+    # Prefer an available DashScope backend when nothing is configured —
+    # Verxio ships Qwen Cloud media by default and config.yaml often has
+    # ``video_gen: null`` after corrupt rewrites.
+    dashscope = snapshot.get("dashscope")
+    if dashscope is not None:
+        try:
+            if dashscope.is_available():
+                return dashscope
+        except Exception as exc:
+            logger.debug("dashscope availability check failed: %s", exc)
+
     return None
 
 

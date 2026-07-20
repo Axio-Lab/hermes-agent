@@ -10,8 +10,11 @@ Families expose both text-to-video and image-to-video; routing follows
 
 from __future__ import annotations
 
+import base64
 import logging
+import mimetypes
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from agent.video_gen_provider import (
@@ -151,6 +154,38 @@ def _download_video(url: str) -> str:
     return str(path)
 
 
+def _image_ref_to_dashscope_url(value: str) -> str:
+    """Return an http(s) or data URI DashScope accepts for first-frame I2V.
+
+    Agents commonly pass the local path from a prior ``image_generate`` call
+    (``/workspace/artifacts/...``). DashScope cannot fetch that path, so we
+    inline the file as a ``data:image/...;base64,...`` URI.
+    """
+    ref = (value or "").strip()
+    if not ref:
+        return ""
+    lower = ref.lower()
+    if lower.startswith(("http://", "https://", "data:image/")):
+        return ref
+
+    path = Path(ref).expanduser()
+    if not path.is_file():
+        # Common Verxio artifact alias: /workspace/artifacts → host cache.
+        workspace_alias = Path("/workspace/artifacts")
+        if str(path).startswith(str(workspace_alias)):
+            alt = Path("/opt/data/artifacts") / path.name
+            if alt.is_file():
+                path = alt
+        if not path.is_file():
+            return ref
+
+    mime = mimetypes.guess_type(path.name)[0] or "image/png"
+    if not mime.startswith("image/"):
+        mime = "image/png"
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:{mime};base64,{encoded}"
+
+
 class DashScopeVideoGenProvider(VideoGenProvider):
     """DashScope HappyHorse / Wan video synthesis."""
 
@@ -224,7 +259,8 @@ class DashScopeVideoGenProvider(VideoGenProvider):
     ) -> Dict[str, Any]:
         del reference_image_urls, negative_prompt, audio  # not in v1 surface
         prompt = (prompt or "").strip()
-        image_ref = image_url.strip() if isinstance(image_url, str) else ""
+        raw_image = image_url.strip() if isinstance(image_url, str) else ""
+        image_ref = _image_ref_to_dashscope_url(raw_image) if raw_image else ""
         modality = "image" if image_ref else "text"
 
         if not api_key():
