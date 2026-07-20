@@ -208,6 +208,45 @@ def test_get_platform_tools_x_search_off_when_no_xai_credentials(monkeypatch):
     assert "x_search" not in cli_enabled
 
 
+def test_get_platform_tools_video_gen_auto_enabled_when_dashscope_key_present(monkeypatch):
+    """video_gen auto-enables when DASHSCOPE_API_KEY is set (Verxio/Qwen path).
+
+    Without this, image→video requests fall through to ffmpeg Ken Burns because
+    video_gen is in _DEFAULT_OFF_TOOLSETS even though DashScope can serve Wan /
+    HappyHorse.
+    """
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "fake-dashscope-key")
+    monkeypatch.setattr(
+        "hermes_cli.tools_config._xai_credentials_present", lambda: False
+    )
+
+    for plat in ("cli", "telegram", "slack", "whatsapp"):
+        enabled = _get_platform_tools({}, plat, include_default_mcp_servers=False)
+        assert "video_gen" in enabled, f"video_gen missing for {plat}"
+
+
+def test_get_platform_tools_video_gen_off_when_no_dashscope_key(monkeypatch):
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    monkeypatch.setattr(
+        "hermes_cli.tools_config._dashscope_credentials_present", lambda: False
+    )
+    monkeypatch.setattr(
+        "hermes_cli.tools_config._xai_credentials_present", lambda: False
+    )
+
+    enabled = _get_platform_tools({}, "cli", include_default_mcp_servers=False)
+    assert "video_gen" not in enabled
+
+
+def test_get_platform_tools_video_gen_respects_explicit_config(monkeypatch):
+    """Explicit saved toolset lists stay authoritative — no silent re-add."""
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "fake-dashscope-key")
+    config = {"platform_toolsets": {"cli": ["hermes-cli", "spotify"]}}
+    enabled = _get_platform_tools(config, "cli", include_default_mcp_servers=False)
+    assert "video_gen" not in enabled
+    assert "spotify" in enabled
+
+
 def test_get_platform_tools_x_search_respects_explicit_config(monkeypatch):
     """Once the user has saved an explicit toolset list via `hermes tools`,
     that list is authoritative — x_search auto-enable does NOT fire even

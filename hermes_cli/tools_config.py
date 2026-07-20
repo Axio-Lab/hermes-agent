@@ -139,6 +139,17 @@ def _xai_credentials_present() -> bool:
         pass
     return bool(str(os.environ.get("XAI_API_KEY") or "").strip())
 
+
+def _dashscope_credentials_present() -> bool:
+    """True when Qwen Cloud / DashScope media credentials are configured.
+
+    Verxio injects ``DASHSCOPE_API_KEY`` for hosted Qwen (and BYOK). When the
+    key is present, auto-enable ``video_gen`` the same way ``x_search`` follows
+    xAI credentials — otherwise image→video requests silently fall back to
+    ffmpeg Ken Burns because ``video_gen`` is in ``_DEFAULT_OFF_TOOLSETS``.
+    """
+    return bool(str(os.environ.get("DASHSCOPE_API_KEY") or "").strip())
+
 # Platform-scoped toolsets: only appear in the `hermes tools` checklist for
 # these platforms, and only resolve/save for these platforms.  A toolset
 # absent from this map is available on every platform (current behaviour).
@@ -1459,6 +1470,15 @@ def _get_platform_tools(
         if x_search_auto_enabled:
             enabled_toolsets.add("x_search")
 
+        # Verxio / Qwen Cloud: DashScope key unlocks image + video. Keep
+        # video_gen available without forcing a Skills → Toolsets toggle.
+        video_gen_auto_enabled = (
+            _toolset_allowed_for_platform("video_gen", platform)
+            and _dashscope_credentials_present()
+        )
+        if video_gen_auto_enabled:
+            enabled_toolsets.add("video_gen")
+
         default_off = set(_DEFAULT_OFF_TOOLSETS)
         # Legacy safety: if the platform's own name matches a default-off
         # toolset (e.g. `homeassistant` platform + `homeassistant` toolset),
@@ -1481,6 +1501,8 @@ def _get_platform_tools(
         # strip the entry we just added.
         if x_search_auto_enabled and "x_search" in default_off:
             default_off.remove("x_search")
+        if video_gen_auto_enabled and "video_gen" in default_off:
+            default_off.remove("video_gen")
         enabled_toolsets -= default_off
 
     # Recover non-configurable platform toolsets (e.g. discord, feishu_doc,

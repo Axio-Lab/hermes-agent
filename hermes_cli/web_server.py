@@ -12012,13 +12012,14 @@ class ToolsetToggle(BaseModel):
 
 @app.put("/api/tools/toolsets/{name}")
 async def toggle_toolset(name: str, body: ToolsetToggle, profile: Optional[str] = None):
-    """Enable/disable a configurable toolset for the desktop (cli) platform.
+    """Enable/disable a configurable toolset across Verxio chat + messaging.
 
-    Persists to ``platform_toolsets.cli`` via the same ``_save_platform_tools``
-    helper the CLI ``hermes tools`` picker uses, so the GUI and CLI stay in
-    lockstep. Scoped to ``body.profile`` when provided. Returns 400 for
-    unknown toolset keys.
+    Persists via ``_save_platform_tools`` for every platform in ``PLATFORMS``
+    (cli / telegram / slack / whatsapp / …) so Skills → Toolsets toggles apply
+    to Telegram/WhatsApp/Slack the same way they do to the web chat. Scoped to
+    ``body.profile`` when provided. Returns 400 for unknown toolset keys.
     """
+    from hermes_cli.platforms import PLATFORMS
     from hermes_cli.tools_config import (
         _get_effective_configurable_toolsets,
         _get_platform_tools,
@@ -12031,14 +12032,17 @@ async def toggle_toolset(name: str, body: ToolsetToggle, profile: Optional[str] 
 
     with _profile_scope(body.profile or profile):
         config = load_config()
-        enabled = set(
-            _get_platform_tools(config, "cli", include_default_mcp_servers=False)
-        )
-        if body.enabled:
-            enabled.add(name)
-        else:
-            enabled.discard(name)
-        _save_platform_tools(config, "cli", enabled)
+        for platform in PLATFORMS:
+            enabled = set(
+                _get_platform_tools(
+                    config, platform, include_default_mcp_servers=False
+                )
+            )
+            if body.enabled:
+                enabled.add(name)
+            else:
+                enabled.discard(name)
+            _save_platform_tools(config, platform, enabled)
     return {"ok": True, "name": name, "enabled": body.enabled}
 
 

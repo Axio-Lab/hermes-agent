@@ -14071,16 +14071,77 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         config.yaml defaults so the switched model is actually used for
         subsequent messages.  Fields with ``None`` values are skipped so
         partial overrides don't clobber valid config defaults.
+
+        Incompatible pairs (e.g. ``anthropic/claude-sonnet-4`` on Alibaba/
+        DashScope) are dropped so messaging gateways don't 404 the same way
+        the Verxio web chat used to.
         """
         override = self._session_model_overrides.get(session_key)
         if not override:
             return model, runtime_kwargs
-        model = override.get("model", model)
+
+        candidate_model = override.get("model", model)
+        candidate_provider = override.get("provider", runtime_kwargs.get("provider"))
+        candidate_base_url = override.get("base_url", runtime_kwargs.get("base_url"))
+        if self._model_incompatible_with_provider(
+            candidate_model, candidate_provider, candidate_base_url
+        ):
+            logger.warning(
+                "Dropping incompatible session model override %s on %s (session=%s)",
+                candidate_model,
+                candidate_provider or candidate_base_url or "?",
+                session_key,
+            )
+            self._session_model_overrides.pop(session_key, None)
+            return model, runtime_kwargs
+
+        model = candidate_model
         for key in ("provider", "api_key", "base_url", "api_mode"):
             val = override.get(key)
             if val is not None:
                 runtime_kwargs[key] = val
         return model, runtime_kwargs
+
+    @staticmethod
+    def _model_incompatible_with_provider(
+        model: str | None, provider: str | None, base_url: str | None = None
+    ) -> bool:
+        m = (model or "").strip().lower()
+        if not m:
+            return False
+        cross_vendor = m.startswith(
+            ("anthropic/", "openai/", "google/", "x-ai/", "meta-llama/", "claude-", "gpt-")
+        )
+        if not cross_vendor:
+            return False
+        p = (provider or "").strip().lower()
+        url = (base_url or "").strip().lower()
+        dashscope = (
+            p in {"alibaba", "dashscope"}
+            or "dashscope" in url
+            or "aliyuncs.com" in url
+        )
+        if dashscope:
+            return True
+        # Anthropic/OpenAI ids with no provider still resolve to the profile
+        # default (often Alibaba in Verxio) — refuse that pair early.
+        if not p and not url:
+            try:
+                from hermes_cli.config import load_config
+
+                cfg = load_config()
+                model_cfg = cfg.get("model") if isinstance(cfg, dict) else None
+                cfg_provider = ""
+                if isinstance(model_cfg, dict):
+                    cfg_provider = str(model_cfg.get("provider") or "").strip().lower()
+                if cfg_provider in {"alibaba", "dashscope"}:
+                    return True
+            except Exception:
+                logger.debug(
+                    "Failed to load config for model/provider heal check",
+                    exc_info=True,
+                )
+        return False
 
     def _is_intentional_model_switch(self, session_key: str, agent_model: str) -> bool:
         """Return True if *agent_model* matches an active /model session override."""

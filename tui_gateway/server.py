@@ -1592,7 +1592,9 @@ def _resolve_model() -> str:
         return str(m.get("default", "") or "").strip()
     if isinstance(m, str) and m:
         return m.strip()
-    return "anthropic/claude-sonnet-4"
+    # Prefer Verxio's DashScope default over a hardcoded Anthropic id that
+    # 404s when Alibaba is the only configured provider.
+    return "qwen3.6-plus"
 
 
 def _config_model_target() -> tuple[str, str]:
@@ -2481,11 +2483,114 @@ def _apply_model_switch(
     }
 
 
+def _is_dashscope_provider(provider: str | None, base_url: str | None = None) -> bool:
+    p = (provider or "").strip().lower()
+    url = (base_url or "").strip().lower()
+    return p in {"alibaba", "dashscope"} or "dashscope" in url or "aliyuncs.com" in url
+
+
+def _is_cross_vendor_model_id(model: str | None) -> bool:
+    """Model ids that must not be sent to DashScope/Alibaba endpoints."""
+    m = (model or "").strip().lower()
+    if not m:
+        return False
+    return m.startswith(
+        ("anthropic/", "openai/", "google/", "x-ai/", "meta-llama/", "claude-", "gpt-")
+    )
+
+
+def _model_incompatible_with_provider(
+    model: str | None, provider: str | None, base_url: str | None = None
+) -> bool:
+    """True when a session override would call the wrong vendor API.
+
+    Classic Verxio failure: UI/session keeps ``anthropic/claude-sonnet-4`` while
+    the active runtime is Alibaba/DashScope → HTTP 404 model_not_found.
+    """
+    if not _is_cross_vendor_model_id(model):
+        return False
+    if _is_dashscope_provider(provider, base_url):
+        return True
+    # Override often stores the Anthropic id with provider=None; resolution then
+    # falls through to the config default (alibaba) and 404s. Treat empty
+    # provider as incompatible when the configured default is DashScope.
+    if not (provider or "").strip() and not (base_url or "").strip():
+        _, cfg_provider = _config_model_target()
+        if _is_dashscope_provider(cfg_provider):
+            return True
+    return False
+
+
+def _heal_incompatible_session_model(sid: str, session: dict) -> bool:
+    """Drop a broken model_override and switch the agent back to config default.
+
+    Returns True when a heal was attempted (caller should continue with sync).
+    """
+    agent = session.get("agent")
+    override = session.get("model_override")
+    model = ""
+    provider = ""
+    base_url = ""
+    if isinstance(override, dict):
+        model = str(override.get("model") or "").strip()
+        provider = str(override.get("provider") or "").strip()
+        base_url = str(override.get("base_url") or "").strip()
+    if agent is not None:
+        model = model or str(getattr(agent, "model", "") or "").strip()
+        provider = provider or str(getattr(agent, "provider", "") or "").strip()
+        base_url = base_url or str(getattr(agent, "base_url", "") or "").strip()
+    if not _model_incompatible_with_provider(model, provider, base_url):
+        return False
+
+    logger.warning(
+        "Healing incompatible session model %s on provider %s (session=%s)",
+        model,
+        provider or base_url or "?",
+        sid,
+    )
+    session.pop("model_override", None)
+    session.pop("config_model_seen", None)
+    target_model, target_provider = _config_model_target()
+    if not target_model:
+        return True
+    if agent is None:
+        return True
+    raw = (
+        f"{target_model} --provider {target_provider}"
+        if target_provider
+        else target_model
+    )
+    try:
+        _apply_model_switch(
+            sid,
+            session,
+            raw,
+            confirm_expensive_model=True,
+            pin_session_override=False,
+        )
+        _emit(
+            "status.update",
+            sid,
+            {
+                "kind": "model",
+                "text": (
+                    f"Model reset to {target_model}"
+                    + (f" ({target_provider})" if target_provider else "")
+                    + f" — {model} is not available on the active provider."
+                ),
+            },
+        )
+    except Exception as exc:
+        logger.warning("Failed to heal incompatible model override: %s", exc)
+    return True
+
+
 def _sync_agent_model_with_config(sid: str, session: dict) -> None:
     """Adopt a config.yaml model change at turn start, like gateways do per
     message. Sessions pinned with /model keep their choice; a failed switch
     keeps the current model and never blocks the turn.
     """
+    _heal_incompatible_session_model(sid, session)
     agent = session.get("agent")
     if agent is None or session.get("model_override"):
         return
@@ -3926,6 +4031,18 @@ def _make_agent(
         override_base_url = model_override.get("base_url")
         override_api_key = model_override.get("api_key")
         override_api_mode = model_override.get("api_mode")
+        # Refuse Anthropic/OpenAI IDs on DashScope — fall back to config default
+        # instead of building an agent that 404s on the first turn.
+        if _model_incompatible_with_provider(model, requested_provider, override_base_url):
+            logger.warning(
+                "Ignoring incompatible model_override %s/%s; using config default",
+                requested_provider,
+                model,
+            )
+            model, requested_provider = _resolve_startup_runtime()
+            override_base_url = None
+            override_api_key = None
+            override_api_mode = None
         resolve_kwargs = {}
         if str(requested_provider or "").strip().lower() == "custom":
             # Session rows persisted before the custom-provider identity fix
@@ -3962,6 +4079,21 @@ def _make_agent(
             runtime["api_key"] = override_api_key
         if override_api_mode:
             runtime["api_mode"] = override_api_mode
+        # Final guard: override provider may have been empty and resolution
+        # landed on DashScope while keeping an Anthropic/OpenAI model id.
+        if _model_incompatible_with_provider(
+            model, runtime.get("provider"), runtime.get("base_url")
+        ):
+            logger.warning(
+                "Resolved runtime incompatible with model %s/%s; using config default",
+                runtime.get("provider"),
+                model,
+            )
+            model, requested_provider = _resolve_startup_runtime()
+            runtime = resolve_runtime_provider(
+                requested=requested_provider,
+                target_model=model or None,
+            )
     else:
         model, requested_provider = _resolve_startup_runtime()
         if isinstance(model_override, str) and model_override:
@@ -3972,6 +4104,19 @@ def _make_agent(
             requested=requested_provider,
             target_model=model or None,
         )
+        if _model_incompatible_with_provider(
+            model, runtime.get("provider"), runtime.get("base_url")
+        ):
+            logger.warning(
+                "Startup model incompatible with resolved provider %s/%s; using config default",
+                runtime.get("provider"),
+                model,
+            )
+            model, requested_provider = _resolve_startup_runtime()
+            runtime = resolve_runtime_provider(
+                requested=requested_provider,
+                target_model=model or None,
+            )
     _pr = _load_provider_routing()
     return AIAgent(
         model=model,
