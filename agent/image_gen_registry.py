@@ -131,10 +131,21 @@ def get_active_provider() -> Optional[ImageGenProvider]:
     if len(available) == 1:
         return available[0]
 
-    # 3. Fallback: prefer legacy FAL for backward compat, when available.
+    # 3. Prefer Verxio Qwen Cloud (DashScope) when available — config.yaml
+    #    frequently has ``image_gen: null`` after corrupt rewrites, and the
+    #    in-tree FAL path must not win just because FAL is also registered.
+    dashscope = snapshot.get("dashscope")
+    if dashscope is not None and _is_available_safe(dashscope):
+        return dashscope
+
+    # 4. Fallback: prefer legacy FAL for backward compat, when available.
     fal = snapshot.get("fal")
     if fal is not None and _is_available_safe(fal):
         return fal
+
+    # 5. Otherwise any remaining available provider (Google, OpenAI, …).
+    if available:
+        return available[0]
 
     return None
 

@@ -97,3 +97,22 @@ class TestPluginDispatch:
         assert payload["success"] is True
         assert payload["provider"] == "codex"
         assert payload["aspect_ratio"] == "portrait"
+
+    def test_dispatch_uses_active_provider_when_config_unset(self, monkeypatch, tmp_path):
+        """Unset image_gen.provider must still hit DashScope/Google/etc."""
+        from tools import image_generation_tool
+        from hermes_cli import plugins as plugins_module
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        (tmp_path / "config.yaml").write_text("image_gen: null\n")
+        image_gen_registry.register_provider(_FakeCodexProvider())
+
+        monkeypatch.setattr(image_generation_tool, "_read_configured_image_provider", lambda: None)
+        monkeypatch.setattr(plugins_module, "_ensure_plugins_discovered", lambda **kwargs: None)
+
+        dispatched = image_generation_tool._dispatch_to_plugin_provider("draw cat", "square")
+        assert dispatched is not None
+        payload = json.loads(dispatched)
+
+        assert payload["success"] is True
+        assert payload["provider"] == "codex"

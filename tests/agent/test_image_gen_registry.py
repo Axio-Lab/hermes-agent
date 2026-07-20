@@ -81,6 +81,13 @@ class TestGetActiveProvider:
         active = image_gen_registry.get_active_provider()
         assert active is not None and active.name == "fal"
 
+    def test_dashscope_preferred_over_fal_without_config(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        image_gen_registry.register_provider(_FakeProvider("fal"))
+        image_gen_registry.register_provider(_FakeProvider("dashscope"))
+        active = image_gen_registry.get_active_provider()
+        assert active is not None and active.name == "dashscope"
+
     def test_explicit_config_wins(self, tmp_path, monkeypatch):
         import yaml
 

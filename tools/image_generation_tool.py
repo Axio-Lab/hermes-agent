@@ -1151,43 +1151,35 @@ def check_fal_api_key() -> bool:
 
 
 def _build_no_backend_setup_message() -> str:
-    """Build an actionable error string when no FAL backend is reachable.
+    """Build an actionable error string when no image backend is reachable.
 
-    Used by the in-tree FAL path. Mentions:
-      - FAL_KEY signup link
-      - managed-gateway status (if Nous tools are enabled)
-      - plugin alternative pointer (so users on a stale ``image_gen.provider``
-        know the registry exists and how to inspect it)
+    Used by the in-tree FAL path after plugin dispatch found nothing.
+    Prefers Verxio media providers (DashScope / Google / OpenAI) over FAL.
     """
     lines = ["Image generation is unavailable in this environment.", ""]
-    lines.append("Missing requirements:")
+    lines.append("To enable image generation, do one of:")
+    lines.append(
+        "  1. Skills → Toolsets → Image Generation → Configure → "
+        "DashScope (Qwen Cloud) with DASHSCOPE_API_KEY"
+    )
+    lines.append(
+        "  2. Skills → Toolsets → Image Generation → Configure → "
+        "Google (Nano Banana) with GOOGLE_API_KEY / GEMINI_API_KEY"
+    )
+    lines.append(
+        "  3. Skills → Toolsets → Image Generation → Configure → "
+        "OpenAI with OPENAI_API_KEY"
+    )
+    lines.append(
+        "  4. Or use FAL.ai: set FAL_KEY from https://fal.ai "
+        "(only needed if you choose the FAL provider)"
+    )
     if managed_nous_tools_enabled():
-        lines.append(
-            "  - FAL_KEY is not set and the managed FAL gateway is unreachable"
-        )
-    else:
-        lines.append("  - FAL_KEY environment variable is not set")
         gateway_message = nous_tool_gateway_unavailable_message(
             "managed FAL image generation",
         )
         if gateway_message:
             lines.append(f"  - {gateway_message}")
-    lines.append("")
-    lines.append("To enable image generation, do one of:")
-    lines.append(
-        "  1. Get a free API key at https://fal.ai and set "
-        "FAL_KEY=<your-key> (then restart the session)"
-    )
-    if managed_nous_tools_enabled():
-        lines.append(
-            "  2. Sign in to a Nous account that has the managed FAL "
-            "gateway enabled (`hermes setup`)"
-        )
-    lines.append(
-        "  3. Configure a different image_gen provider via `hermes tools` "
-        "→ Image Generation (run `hermes plugins list` to see installed "
-        "backends)"
-    )
     return "\n".join(lines)
 
 
@@ -1390,36 +1382,47 @@ def _dispatch_to_plugin_provider(
     Returns a JSON string on dispatch, or ``None`` to fall through to the
     in-tree FAL fallback in ``image_generate_tool``.
 
-    Dispatch fires when ``image_gen.provider`` is explicitly set — including
-    ``"fal"`` itself, which now resolves to the
-    ``plugins/image_gen/fal/`` plugin (the plugin re-enters this module's
-    pipeline via ``_it`` indirection so behavior is identical to the
-    direct call, just routed through the registry).
+    Dispatch fires when:
+
+    1. ``image_gen.provider`` is explicitly set (including ``"fal"``), or
+    2. no provider is configured but :func:`get_active_provider` resolves an
+       available plugin (e.g. DashScope when ``DASHSCOPE_API_KEY`` is set and
+       config.yaml has ``image_gen: null`` after a corrupt rewrite).
 
     ``image_url`` / ``reference_image_urls`` enable image-to-image / editing:
     they are forwarded to the provider's ``generate()`` so the backend can
     route to its edit endpoint.
     """
     configured = _read_configured_image_provider()
-    if not configured:
-        return None
-
-    # Also read configured model so we can pass it to the plugin
     configured_model = _read_configured_image_model()
+    provider = None
 
     try:
         # Import locally so plugin discovery isn't triggered just by
         # importing this module (tests rely on that).
-        from agent.image_gen_registry import get_provider
+        from agent.image_gen_registry import get_active_provider, get_provider
         from hermes_cli.plugins import _ensure_plugins_discovered
 
         _ensure_plugins_discovered()
-        provider = get_provider(configured)
+        if configured:
+            provider = get_provider(configured)
+        else:
+            # Verxio often loses ``image_gen.provider`` from config.yaml.
+            # Prefer any ready plugin (DashScope/Google/OpenAI/…) over the
+            # in-tree FAL path that only understands FAL_KEY.
+            provider = get_active_provider()
+            if provider is not None:
+                configured = provider.name
+                if not configured_model:
+                    try:
+                        configured_model = provider.default_model()
+                    except Exception:
+                        configured_model = None
     except Exception as exc:
         logger.debug("image_gen plugin dispatch skipped: %s", exc)
         return None
 
-    if provider is None:
+    if configured and provider is None:
         try:
             # Long-lived sessions may have discovered plugins before a bundled
             # backend was patched in or before config changed. Retry once with
@@ -1428,6 +1431,9 @@ def _dispatch_to_plugin_provider(
             provider = get_provider(configured)
         except Exception as exc:
             logger.debug("image_gen plugin force-refresh skipped: %s", exc)
+
+    if not configured:
+        return None
 
     if provider is None:
         return json.dumps({
@@ -1556,7 +1562,7 @@ def _active_image_capabilities() -> Dict[str, Any]:
     """Best-effort: return the active backend/model's image capabilities.
 
     Resolution order mirrors the runtime dispatch:
-    1. If ``image_gen.provider`` is set, ask that plugin provider.
+    1. Explicit ``image_gen.provider`` / :func:`get_active_provider` plugin.
     2. Otherwise inspect the in-tree FAL model catalog for the active model.
 
     Returns a dict like ``{"modalities": [...], "max_reference_images": N,
@@ -1564,31 +1570,34 @@ def _active_image_capabilities() -> Dict[str, Any]:
     """
     info: Dict[str, Any] = {"modalities": ["text"], "max_reference_images": 0}
 
-    configured_provider = _read_configured_image_provider()
-    if configured_provider and configured_provider != "fal":
-        try:
-            from agent.image_gen_registry import get_provider
-            from hermes_cli.plugins import _ensure_plugins_discovered
+    try:
+        from agent.image_gen_registry import get_active_provider, get_provider
+        from hermes_cli.plugins import _ensure_plugins_discovered
 
-            _ensure_plugins_discovered()
-            provider = get_provider(configured_provider)
-            if provider is not None:
+        _ensure_plugins_discovered()
+        configured_provider = _read_configured_image_provider()
+        provider = (
+            get_provider(configured_provider)
+            if configured_provider
+            else get_active_provider()
+        )
+        if provider is not None and provider.name != "fal":
+            caps = {}
+            try:
+                caps = provider.capabilities() or {}
+            except Exception:  # noqa: BLE001
                 caps = {}
-                try:
-                    caps = provider.capabilities() or {}
-                except Exception:  # noqa: BLE001
-                    caps = {}
-                info["provider"] = provider.display_name
-                info["model"] = _read_configured_image_model() or (provider.default_model() or "")
-                if caps.get("modalities"):
-                    info["modalities"] = list(caps["modalities"])
-                if caps.get("max_reference_images"):
-                    info["max_reference_images"] = int(caps["max_reference_images"])
-                return info
-        except Exception:  # noqa: BLE001
-            pass
+            info["provider"] = provider.display_name
+            info["model"] = _read_configured_image_model() or (provider.default_model() or "")
+            if caps.get("modalities"):
+                info["modalities"] = list(caps["modalities"])
+            if caps.get("max_reference_images"):
+                info["max_reference_images"] = int(caps["max_reference_images"])
+            return info
+    except Exception:  # noqa: BLE001
+        pass
 
-    # In-tree FAL path (provider unset or == "fal").
+    # In-tree FAL path (provider unset/fal and no other plugin ready).
     try:
         model_id, meta = _resolve_fal_model()
         info["provider"] = "FAL.ai"
