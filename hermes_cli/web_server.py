@@ -531,7 +531,40 @@ _SCHEMA_OVERRIDES: Dict[str, Dict[str, Any]] = {
     "tts.provider": {
         "type": "select",
         "description": "Text-to-speech provider",
-        "options": ["edge", "elevenlabs", "openai", "neutts"],
+        "options": ["edge", "elevenlabs", "openai", "neutts", "dashscope"],
+    },
+    "tts.dashscope.model": {
+        "type": "select",
+        "description": "DashScope / Qwen Cloud TTS model (speech synthesis)",
+        "options": [
+            "qwen3-tts-flash",
+            "qwen3-tts-instruct-flash",
+            "cosyvoice-v3-plus",
+            "cosyvoice-v3-flash",
+            "cosyvoice-v3.5-plus",
+        ],
+    },
+    "tts.dashscope.voice": {
+        "type": "string",
+        "description": "DashScope TTS voice id (e.g. Cherry, Serena, Ethan)",
+    },
+    "image_gen.provider": {
+        "type": "select",
+        "description": "Image generation provider (text-to-image / image editing)",
+        "options": ["fal", "openai", "openai-codex", "xai", "krea", "dashscope"],
+    },
+    "image_gen.model": {
+        "type": "string",
+        "description": "Image generation model id for the active provider",
+    },
+    "video_gen.provider": {
+        "type": "select",
+        "description": "Video generation provider (text-to-video / image-to-video)",
+        "options": ["fal", "xai", "dashscope"],
+    },
+    "video_gen.model": {
+        "type": "string",
+        "description": "Video generation model family id (e.g. happyhorse-1.1, wan2.7)",
     },
     "stt.provider": {
         "type": "select",

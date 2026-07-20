@@ -2804,6 +2804,113 @@ def _select_plugin_video_gen_provider(plugin_name: str, config: dict, *, use_gat
     _configure_videogen_model_for_plugin(plugin_name, config)
 
 
+def _plugin_tts_catalog(plugin_name: str):
+    """Return ``(model_catalog, default_model, voice_catalog, default_voice)``."""
+    try:
+        from agent.tts_registry import get_provider
+        from hermes_cli.plugins import _ensure_plugins_discovered
+
+        _ensure_plugins_discovered()
+        provider = get_provider(plugin_name)
+    except Exception:
+        return {}, None, {}, None
+    if provider is None:
+        return {}, None, {}, None
+    try:
+        models = provider.list_models() or []
+        voices = provider.list_voices() or []
+        default_model = provider.default_model()
+        default_voice = provider.default_voice()
+    except Exception:
+        return {}, None, {}, None
+    model_catalog = {m["id"]: m for m in models if isinstance(m, dict) and "id" in m}
+    voice_catalog = {v["id"]: v for v in voices if isinstance(v, dict) and "id" in v}
+    return model_catalog, default_model, voice_catalog, default_voice
+
+
+def _configure_tts_model_for_plugin(plugin_name: str, config: dict) -> None:
+    """Prompt for TTS model + voice from a plugin provider catalog.
+
+    Writes ``tts.<plugin_name>.model`` and ``tts.<plugin_name>.voice`` (and
+    keeps ``tts.provider`` pointing at the plugin). Strengths/labels from
+    ``list_models()`` are shown so users can see speech-synthesis purpose.
+    """
+    model_catalog, default_model, voice_catalog, default_voice = _plugin_tts_catalog(
+        plugin_name
+    )
+    tts_cfg = config.setdefault("tts", {})
+    if not isinstance(tts_cfg, dict):
+        tts_cfg = {}
+        config["tts"] = tts_cfg
+    nested = tts_cfg.setdefault(plugin_name, {})
+    if not isinstance(nested, dict):
+        nested = {}
+        tts_cfg[plugin_name] = nested
+
+    if model_catalog:
+        current_model = nested.get("model") or default_model
+        if current_model not in model_catalog:
+            current_model = default_model
+        model_ids = list(model_catalog.keys())
+        ordered = [current_model] + [m for m in model_ids if m != current_model]
+        widths = {
+            "model": max(len(m) for m in model_ids),
+            "strengths": max(
+                (len(model_catalog[m].get("strengths", "")) for m in model_ids),
+                default=0,
+            ),
+        }
+        print()
+        header = (
+            f"  {'Model':<{widths['model']}}  "
+            f"{'Strengths':<{widths['strengths']}}"
+        )
+        print(color(header, Colors.CYAN))
+        rows = []
+        for mid in ordered:
+            meta = model_catalog[mid]
+            row = (
+                f"  {mid:<{widths['model']}}  "
+                f"{meta.get('strengths', ''):<{widths['strengths']}}"
+            )
+            if mid == current_model:
+                row += "  ← currently in use"
+            rows.append(row)
+        idx = _prompt_choice(f"  Choose {plugin_name} TTS model:", rows, default=0)
+        nested["model"] = ordered[idx]
+        _print_success(f"  TTS model set to: {ordered[idx]}")
+
+    if voice_catalog:
+        current_voice = nested.get("voice") or default_voice
+        if current_voice not in voice_catalog:
+            current_voice = default_voice
+        voice_ids = list(voice_catalog.keys())
+        ordered_v = [current_voice] + [v for v in voice_ids if v != current_voice]
+        rows = []
+        for vid in ordered_v:
+            meta = voice_catalog[vid]
+            label = meta.get("display") or vid
+            row = f"  {vid} — {label}"
+            if vid == current_voice:
+                row += "  ← currently in use"
+            rows.append(row)
+        idx = _prompt_choice(f"  Choose {plugin_name} voice:", rows, default=0)
+        nested["voice"] = ordered_v[idx]
+        _print_success(f"  TTS voice set to: {ordered_v[idx]}")
+
+
+def _select_plugin_tts_provider(plugin_name: str, config: dict) -> None:
+    """Persist a plugin-backed TTS provider selection and prompt for model/voice."""
+    tts_cfg = config.setdefault("tts", {})
+    if not isinstance(tts_cfg, dict):
+        tts_cfg = {}
+        config["tts"] = tts_cfg
+    tts_cfg["provider"] = plugin_name
+    tts_cfg["use_gateway"] = False
+    _print_success(f"  tts.provider set to: {plugin_name}")
+    _configure_tts_model_for_plugin(plugin_name, config)
+
+
 def _write_provider_config(provider: dict, config: dict, *, managed_feature) -> None:
     """Persist the provider/backend config keys for a selected provider.
 
@@ -2994,6 +3101,10 @@ def _configure_provider(
         if video_plugin:
             _select_plugin_video_gen_provider(video_plugin, config, use_gateway=bool(managed_feature))
             return
+        tts_plugin = provider.get("tts_plugin_name")
+        if tts_plugin:
+            _select_plugin_tts_provider(tts_plugin, config)
+            return
         # Imagegen backends prompt for model selection after backend pick.
         backend = provider.get("imagegen_backend")
         if backend:
@@ -3072,6 +3183,10 @@ def _configure_provider(
         video_plugin = provider.get("video_gen_plugin_name")
         if video_plugin:
             _select_plugin_video_gen_provider(video_plugin, config, use_gateway=bool(managed_feature))
+            return
+        tts_plugin = provider.get("tts_plugin_name")
+        if tts_plugin:
+            _select_plugin_tts_provider(tts_plugin, config)
             return
         # Imagegen backends prompt for model selection after env vars are in.
         backend = provider.get("imagegen_backend")
@@ -3325,6 +3440,10 @@ def _reconfigure_provider(
         tts_cfg["provider"] = provider["tts_provider"]
         tts_cfg["use_gateway"] = bool(managed_feature)
         _print_success(f"  TTS provider set to: {provider['tts_provider']}")
+        # Plugin TTS backends (e.g. dashscope) expose model/voice catalogs —
+        # prompt for them the same way image_gen / video_gen plugins do.
+        if provider.get("tts_plugin_name") and not managed_feature:
+            _configure_tts_model_for_plugin(provider["tts_plugin_name"], config)
 
     if "browser_provider" in provider:
         bp = provider["browser_provider"]

@@ -40,11 +40,17 @@ def _reset_registry():
     tts_registry._reset_for_tests()
 
 
+def _non_bundled_tts_rows(rows: list[dict]) -> list[dict]:
+    """Filter out bundled TTS backends (e.g. dashscope) from picker rows."""
+    return [row for row in rows if row.get("tts_plugin_name") not in {"dashscope"}]
+
+
 class TestPluginTTSProviders:
     """``_plugin_tts_providers()`` returns picker-row dicts."""
 
-    def test_empty_when_no_plugins(self):
-        assert tools_config._plugin_tts_providers() == []
+    def test_empty_when_no_extra_plugins(self):
+        # Bundled backends like dashscope may still appear after discovery.
+        assert _non_bundled_tts_rows(tools_config._plugin_tts_providers()) == []
 
     def test_returns_row_for_registered_plugin(self):
         tts_registry.register_provider(
@@ -61,7 +67,7 @@ class TestPluginTTSProviders:
                 },
             )
         )
-        rows = tools_config._plugin_tts_providers()
+        rows = _non_bundled_tts_rows(tools_config._plugin_tts_providers())
         assert len(rows) == 1
         row = rows[0]
         assert row["name"] == "Cartesia"
@@ -85,7 +91,7 @@ class TestPluginTTSProviders:
         provider = _FakeTTSProvider(name="edge")
         tts_registry._providers["edge"] = provider  # type: ignore[index]
         try:
-            rows = tools_config._plugin_tts_providers()
+            rows = _non_bundled_tts_rows(tools_config._plugin_tts_providers())
             assert rows == [], (
                 "Picker must filter built-in name shadows even when the "
                 "registry has been bypassed."
@@ -117,14 +123,14 @@ class TestPluginTTSProviders:
 
         tts_registry.register_provider(_ExplodingSchema(name="exploding"))
         tts_registry.register_provider(_FakeTTSProvider(name="working"))
-        rows = tools_config._plugin_tts_providers()
+        rows = _non_bundled_tts_rows(tools_config._plugin_tts_providers())
         assert [r["tts_plugin_name"] for r in rows] == ["working"]
 
     def test_minimal_schema_uses_display_name(self):
         """A provider with no setup_schema override gets a row built from
         ``display_name`` and ``name`` only."""
         tts_registry.register_provider(_FakeTTSProvider(name="minimal"))
-        rows = tools_config._plugin_tts_providers()
+        rows = _non_bundled_tts_rows(tools_config._plugin_tts_providers())
         assert len(rows) == 1
         assert rows[0]["name"] == "Minimal"  # display_name default
         assert rows[0]["tts_provider"] == "minimal"
@@ -141,7 +147,7 @@ class TestPluginTTSProviders:
                 },
             )
         )
-        rows = tools_config._plugin_tts_providers()
+        rows = _non_bundled_tts_rows(tools_config._plugin_tts_providers())
         assert rows[0].get("post_setup") == "my_post_install_hook"
 
 
@@ -162,7 +168,10 @@ class TestVisibleProvidersInjectsTTSPlugins:
         assert "Cartesia" in names
 
         # Plugin row has tts_provider key for write-path compat
-        plugin_rows = [r for r in visible if r.get("tts_plugin_name")]
+        plugin_rows = [
+            r for r in visible
+            if r.get("tts_plugin_name") and r.get("tts_plugin_name") != "dashscope"
+        ]
         assert len(plugin_rows) == 1
         assert plugin_rows[0]["tts_provider"] == "cartesia"
 
@@ -176,12 +185,11 @@ class TestVisibleProvidersInjectsTTSPlugins:
         names = [row.get("name") for row in visible]
         assert "Cartesia" not in names
 
-    def test_tts_category_without_plugins_only_hardcoded(self):
-        """No plugins → picker shows exactly the hardcoded rows."""
+    def test_tts_category_includes_bundled_dashscope_plugin(self):
+        """Bundled DashScope TTS appears as a plugin row alongside hardcoded ones."""
         tts_cat = tools_config.TOOL_CATEGORIES["tts"]
         visible = tools_config._visible_providers(tts_cat, config={})
         names = [row.get("name") for row in visible]
-        # No row has the plugin marker
-        assert all(not row.get("tts_plugin_name") for row in visible)
-        # Hardcoded rows still present (sample one of the always-visible ones)
         assert "Microsoft Edge TTS" in names
+        plugin_names = {row.get("tts_plugin_name") for row in visible if row.get("tts_plugin_name")}
+        assert "dashscope" in plugin_names

@@ -959,6 +959,7 @@ _AUTO_APPEND_MEDIA_TOOL_NAMES = {
     "text_to_speech",
     "text_to_speech_tool",
     "image_generate",
+    "video_generate",
     # File tools: only paths under an ``artifacts/`` directory with a
     # deliverable extension are appended (see ``_artifact_paths_from_tool_json``).
     "write_file",
@@ -1112,7 +1113,13 @@ def _strip_auto_continue_noise(content: Any) -> Any:
 # returns ``{"success": true, "image": "/abs/path.png"}``). The auto-append path
 # extracts the path from these fields so delivery is deterministic and does not
 # depend on the model restating the path in its final reply.
-_JSON_MEDIA_TOOL_PATH_FIELDS = ("host_image", "image", "agent_visible_image")
+_JSON_MEDIA_TOOL_PATH_FIELDS = (
+    "host_image",
+    "image",
+    "agent_visible_image",
+    "video",
+    "host_video",
+)
 
 
 # Extension-anchored MEDIA: matcher for tool results. Mirrors MEDIA_DELIVERY_EXTS
@@ -1258,7 +1265,7 @@ def _collect_auto_append_media_tags(
         # JSON-payload tools (image_generate) return a local-file path in a
         # known field rather than a MEDIA: tag. Extract it so delivery is
         # deterministic even when the model omits the path from its reply.
-        if tool_name == "image_generate" and "MEDIA:" not in content:
+        if tool_name in ("image_generate", "video_generate") and "MEDIA:" not in content:
             try:
                 payload = json.loads(content)
             except Exception:
@@ -1328,7 +1335,7 @@ def _collect_history_media_paths(agent_history: List[Dict[str, Any]]) -> set:
             continue
         cid = str(msg.get("tool_call_id") or msg.get("call_id") or "")
         tool_name = tool_name_by_call_id.get(cid)
-        if tool_name == "image_generate":
+        if tool_name in ("image_generate", "video_generate"):
             try:
                 payload = json.loads(content)
             except Exception:
