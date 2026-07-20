@@ -49,6 +49,8 @@ _HERMES_CORE_TOOLS = [
     "browser_vision", "browser_console", "browser_cdp", "browser_dialog",
     # Text-to-speech
     "text_to_speech",
+    # Verxio Notepad (gated on VERXIO_API_URL + runtime token via check_fn)
+    "notepad",
     # Planning & memory
     "todo", "memory",
     # Session history search
@@ -205,6 +207,15 @@ TOOLSETS = {
         "description": "Text-to-speech: convert text to audio with Edge TTS (free), ElevenLabs, OpenAI, or xAI",
         "tools": ["text_to_speech"],
         "includes": []
+    },
+
+    "notepad": {
+        "description": (
+            "Verxio Notepad — list/read/create notes and public summary share "
+            "URLs. Available in hosted Verxio runtimes (web chat + messaging)."
+        ),
+        "tools": ["notepad"],
+        "includes": [],
     },
     
     "todo": {
