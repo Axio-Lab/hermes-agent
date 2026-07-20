@@ -835,9 +835,12 @@ VERXIO_CREDENTIAL_GUIDANCE = (
     "start a new chat if the tool still fails. You may use the runtime_control "
     "tool with action reload_env once they confirm the key is saved. Do not "
     "tell users to add FAL_KEY unless the active image_gen/video_gen provider "
-    "is actually FAL. When video_generate is available, call it for AI video "
-    "(image-to-video / text-to-video); do not substitute ffmpeg Ken Burns or "
-    "another image_generate call."
+    "is actually FAL. Choose the right video path: if the user only wants a "
+    "static image turned into a short video with no AI motion (Ken Burns zoom, "
+    "pan, or slideshow), use ffmpeg — that needs no video model or API key. "
+    "If they want AI-generated motion (characters moving, scene coming alive), "
+    "call video_generate (image-to-video / text-to-video). Do not use another "
+    "image_generate call as a substitute for either path."
 )
 
 # ---------------------------------------------------------------------------

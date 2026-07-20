@@ -127,6 +127,7 @@ class TestDynamicSchemaBuilder:
         assert "Active backend: Dashscope" in desc  # VideoGenProvider.display_name title-cases name
         assert "No video backend is available" not in desc
         assert "ffmpeg" in desc.lower()
+        assert "ken burns" in desc.lower() or "static image" in desc.lower()
 
     def test_does_not_mention_edit_or_extend(self, cfg_home):
         """The simplified surface only does text→video and image→video.

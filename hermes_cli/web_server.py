@@ -11861,6 +11861,17 @@ class SkillContentUpdate(BaseModel):
     profile: Optional[str] = None
 
 
+class SkillSupportingFile(BaseModel):
+    path: str
+    content: str
+
+
+class SkillFilesWrite(BaseModel):
+    name: str
+    files: List[SkillSupportingFile]
+    profile: Optional[str] = None
+
+
 def _clear_skills_prompt_cache() -> None:
     """Best-effort: invalidate the skills system-prompt snapshot after a write.
 
@@ -11925,6 +11936,37 @@ async def update_skill_content(body: SkillContentUpdate):
         raise HTTPException(status_code=status, detail=err)
     _clear_skills_prompt_cache()
     return result
+
+
+@app.post("/api/skills/files")
+async def write_skill_files(body: SkillFilesWrite):
+    """Write supporting skill files after a client-side package extract.
+
+    The browser unpacks the zip locally and posts only text files under
+    ``references/``, ``templates/``, ``scripts/``, or ``assets/`` — the raw
+    archive never hits the server. Uses the same validated path as
+    ``skill_manage(action='write_file')``.
+    """
+    from tools.skill_manager_tool import _write_file
+
+    if not body.files:
+        raise HTTPException(status_code=400, detail="files is required.")
+    if len(body.files) > 64:
+        raise HTTPException(status_code=400, detail="Too many files (max 64).")
+
+    written: List[str] = []
+    with _profile_scope(body.profile):
+        for item in body.files:
+            result = _write_file(body.name, item.path, item.content)
+            if not result.get("success"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=result.get("error", f"Failed to write {item.path}."),
+                )
+            written.append(item.path)
+
+    _clear_skills_prompt_cache()
+    return {"ok": True, "name": body.name, "written": written}
 
 
 @app.get("/api/tools/toolsets")

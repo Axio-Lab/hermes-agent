@@ -504,8 +504,10 @@ def _build_dynamic_video_schema() -> Dict[str, Any]:
         line += f" (resolved from unavailable '{configured}')"
     parts.append(line)
     parts.append(
-        "- Prefer this tool for AI motion/video. Do not use ffmpeg Ken Burns "
-        "or image_generate as a substitute when this backend is available."
+        "- Use this tool for AI motion (image-to-video / text-to-video). For a "
+        "static image → short video with no AI motion (Ken Burns zoom/pan), "
+        "prefer ffmpeg instead — no model key required. Do not substitute "
+        "image_generate for either path."
     )
 
     # Model-specific caveats (the high-signal stuff)
