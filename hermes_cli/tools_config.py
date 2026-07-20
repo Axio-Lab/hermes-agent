@@ -523,10 +523,37 @@ TOOL_CATEGORIES = {
             },
         ],
     },
+    "moa": {
+        "name": "Mixture of Agents",
+        "icon": "🧠",
+        # Single-provider toolset: OpenRouter fans the prompt out to several
+        # frontier models and aggregates the answers. Surfaced here so the
+        # Skills → Toolsets Configure panel can collect OPENROUTER_API_KEY
+        # instead of showing the empty "no provider options" state.
+        "providers": [
+            {
+                "name": "OpenRouter",
+                "badge": "paid",
+                "tag": (
+                    "Routes hard problems through multiple frontier models "
+                    "(~5 API calls per use) — Claude / Gemini / GPT / DeepSeek"
+                ),
+                "env_vars": [
+                    {
+                        "key": "OPENROUTER_API_KEY",
+                        "prompt": "OpenRouter API key",
+                        "url": "https://openrouter.ai/keys",
+                    },
+                ],
+            },
+        ],
+    },
 }
 
 # Simple env-var requirements for toolsets NOT in TOOL_CATEGORIES.
-# Used as a fallback for tools like vision/moa that just need an API key.
+# Used as a fallback for tools like vision that just need an API key.
+# ``moa`` now lives in TOOL_CATEGORIES (OpenRouter row) but stays listed
+# here so CLI ``_toolset_has_keys`` / reconfigure still resolve the key.
 TOOLSET_ENV_REQUIREMENTS = {
     "vision":     [("OPENROUTER_API_KEY",   "https://openrouter.ai/keys")],
     "moa":        [("OPENROUTER_API_KEY",   "https://openrouter.ai/keys")],
@@ -2462,6 +2489,13 @@ def _is_provider_active(
             and configured_provider in {None, "", "fal"}
             and not is_truthy_value(image_cfg.get("use_gateway"), default=False)
         )
+
+    # Env-only providers (e.g. MoA → OpenRouter): treat as active when every
+    # required key is present so the GUI expands the right Configure row.
+    env_vars = provider.get("env_vars") or []
+    if env_vars and all(get_env_value(v["key"]) for v in env_vars):
+        return True
+
     return False
 
 
