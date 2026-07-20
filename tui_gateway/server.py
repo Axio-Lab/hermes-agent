@@ -1660,6 +1660,68 @@ def _resolve_startup_runtime() -> tuple[str, str | None]:
 _BARE_BILLING_PROVIDERS = {"auto", "openrouter", "custom"}
 
 
+def _is_missing_provider_auth_error(error: BaseException) -> bool:
+    """True when agent build failed because a BYOK/OAuth provider has no credentials."""
+    try:
+        from hermes_cli.auth import AuthError
+    except Exception:
+        AuthError = ()  # type: ignore[misc, assignment]
+
+    if isinstance(error, AuthError):
+        if getattr(error, "relogin_required", False):
+            return True
+        code = str(getattr(error, "code", "") or "")
+        if code.endswith("_missing") or "auth_missing" in code or "no_provider" in code:
+            return True
+
+    message = str(error or "").strip().lower()
+    return any(
+        needle in message
+        for needle in (
+            "no codex credentials stored",
+            "no llm provider configured",
+            "auth is missing",
+            "run `hermes auth`",
+            "run hermes auth",
+            "no_provider_configured",
+            "re-authenticate",
+        )
+    )
+
+
+def _heal_stale_provider_pin_from_auth_error(error: BaseException) -> None:
+    """Drop a config.yaml provider pin that can no longer authenticate."""
+    provider = ""
+    try:
+        from hermes_cli.auth import AuthError
+
+        if isinstance(error, AuthError):
+            provider = str(getattr(error, "provider", "") or "").strip().lower()
+    except Exception:
+        provider = ""
+
+    message = str(error or "").lower()
+    if not provider:
+        if "codex" in message:
+            provider = "openai-codex"
+        elif "anthropic" in message or "claude" in message:
+            provider = "anthropic"
+
+    if not provider:
+        return
+
+    try:
+        from hermes_cli.web_server import _clear_main_model_if_provider
+
+        if _clear_main_model_if_provider(provider):
+            logger.info(
+                "cleared stale main model pin for provider %s after auth failure",
+                provider,
+            )
+    except Exception:
+        logger.debug("failed to heal stale provider pin", exc_info=True)
+
+
 def _stored_session_runtime_overrides(row: dict | None) -> dict:
     """Return runtime fields persisted with a stored session.
 
@@ -3755,6 +3817,8 @@ def _schedule_mcp_late_refresh(sid: str, agent) -> None:
     require an explicit ``/reload-mcp`` (which gates on user consent), exactly
     as today. No-op when discovery already finished before the agent build.
     """
+    if agent is None:
+        return
     try:
         from tui_gateway.entry import mcp_discovery_in_flight, join_mcp_discovery
     except Exception:
@@ -4860,6 +4924,9 @@ def _(rid, params: dict) -> dict:
         ]
         messages = _history_to_messages(display_history)
         tokens = _set_session_context(target)
+        agent = None
+        agent_error = None
+        stored_runtime_overrides: dict = {}
         try:
             # Pass the profile's db so the agent persists turns to the right
             # state.db; home override is active here so config/skills/model
@@ -4875,13 +4942,27 @@ def _(rid, params: dict) -> dict:
             stored_runtime_overrides = (
                 {} if use_current_model else _stored_session_runtime_overrides(found)
             )
-            agent = _make_agent(
-                sid,
-                target,
-                session_id=target,
-                session_db=db,
-                **stored_runtime_overrides,
-            )
+            try:
+                agent = _make_agent(
+                    sid,
+                    target,
+                    session_id=target,
+                    session_db=db,
+                    **stored_runtime_overrides,
+                )
+            except Exception as build_err:
+                # Missing/revoked BYOK credentials must not block resume — the
+                # transcript should still load and the UI can prompt to pick a
+                # model or re-authenticate.
+                if not _is_missing_provider_auth_error(build_err):
+                    raise
+                agent = None
+                agent_error = str(build_err)
+                _heal_stale_provider_pin_from_auth_error(build_err)
+                logger.warning(
+                    "session.resume: continuing without agent after auth failure: %s",
+                    agent_error,
+                )
         finally:
             _clear_session_context(tokens)
     except Exception as e:
@@ -4946,11 +5027,24 @@ def _(rid, params: dict) -> dict:
                 if profile_home is not None:
                     _sessions[sid]["profile_home"] = str(profile_home)
                 _sessions[sid]["active_session_lease"] = lease
+                if agent_error:
+                    _sessions[sid]["agent_error"] = agent_error
+                    _sessions[sid]["lazy"] = True
         except Exception as e:
             if lease is not None:
                 lease.release()
             return _err(rid, 5000, f"resume failed: {e}")
         session = _sessions.get(sid) or {}
+    info = _session_info(agent, session) if agent is not None else {
+        "cwd": _session_cwd(session),
+        "branch": _git_branch_for_cwd(_session_cwd(session)),
+        "lazy": True,
+        "model": "",
+        "provider": "",
+    }
+    if agent_error:
+        info["credential_warning"] = agent_error
+        info["agent_error"] = agent_error
     return _ok(
         rid,
         {
@@ -4958,7 +5052,7 @@ def _(rid, params: dict) -> dict:
             "resumed": target,
             "message_count": len(messages),
             "messages": messages,
-            "info": _session_info(agent, session),
+            "info": info,
             "inflight": None,
             "running": False,
             "session_key": target,

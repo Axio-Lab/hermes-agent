@@ -7199,7 +7199,15 @@ def _clear_main_model_if_provider(provider_id: str) -> bool:
         return False
 
     current = str(model_cfg.get("provider") or "").strip().lower()
-    if current != target:
+    base_url = str(model_cfg.get("base_url") or "").strip().lower()
+    # Also clear when the endpoint still points at this provider even if the
+    # provider field was left in a mismatched/partial state.
+    endpoint_matches = False
+    if target == "openai-codex" and "chatgpt.com/backend-api/codex" in base_url:
+        endpoint_matches = True
+    if target in {"anthropic", "claude"} and "api.anthropic.com" in base_url:
+        endpoint_matches = True
+    if current != target and not endpoint_matches:
         return False
 
     model_cfg.pop("provider", None)
