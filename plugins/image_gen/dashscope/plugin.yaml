@@ -1,0 +1,7 @@
+name: dashscope
+version: 1.0.0
+description: "Alibaba DashScope / Qwen Cloud image generation — text-to-image and image editing via DASHSCOPE_API_KEY."
+author: Axio Lab
+kind: backend
+requires_env:
+  - DASHSCOPE_API_KEY
