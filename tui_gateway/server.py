@@ -10226,8 +10226,11 @@ def _(rid, params: dict) -> dict:
             include_unconfigured=True,
             picker_hints=True,
             canonical_order=True,
-            pricing=True,
-            capabilities=True,
+            # Match REST /api/model/options: skip pricing/capabilities unless
+            # the caller asked for an explicit refresh. Keeps the statusbar
+            # model list snappy after OAuth connect.
+            pricing=bool(params.get("refresh")),
+            capabilities=bool(params.get("refresh")),
             refresh=bool(params.get("refresh")),
         )
         return _ok(rid, payload)

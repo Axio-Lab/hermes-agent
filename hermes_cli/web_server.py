@@ -3754,8 +3754,12 @@ def get_model_options(profile: Optional[str] = None, refresh: bool = False):
                 include_unconfigured=True,
                 picker_hints=True,
                 canonical_order=True,
-                pricing=True,
-                capabilities=True,
+                # Pricing/capabilities enrichment hits models.dev and can block
+                # the dashboard event loop for tens of seconds. Skip on normal
+                # opens so BYOK connect can paint models immediately; explicit
+                # refresh=1 still pulls the full enriched catalog.
+                pricing=bool(refresh),
+                capabilities=bool(refresh),
                 refresh=bool(refresh),
             )
     except HTTPException:
