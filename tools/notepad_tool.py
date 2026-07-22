@@ -172,11 +172,17 @@ def _handle_notepad(args: Dict[str, Any], **_kw: Any) -> str:
         )
 
     if action == "create":
+        content = str(args.get("content") or "")
+        summary = str(args.get("summary") or "")
+        # Public share URLs render summary. If the agent only filled content,
+        # promote it so create+share does not produce a blank preview.
+        if not summary.strip() and content.strip():
+            summary = content
         body: Dict[str, Any] = {
             "title": str(args.get("title") or "Untitled note").strip() or "Untitled note",
-            "content": str(args.get("content") or ""),
+            "content": content,
             "transcript": str(args.get("transcript") or ""),
-            "summary": str(args.get("summary") or ""),
+            "summary": summary,
             "meeting_type": str(args.get("meeting_type") or "general"),
             "source": str(args.get("source") or "agent"),
         }
@@ -215,6 +221,23 @@ def _handle_notepad(args: Dict[str, Any], **_kw: Any) -> str:
                 {"ok": False, "error": "note_id is required for share"},
                 ensure_ascii=False,
             )
+        # Ensure summary is populated before share (API also promotes, but do
+        # it here so the tool result message is accurate even on older APIs).
+        listing = _request("GET", "/api/notepad")
+        if not (listing.get("error") and not listing.get("ok", True)):
+            for note in listing.get("notes") or []:
+                if isinstance(note, dict) and note.get("id") == note_id:
+                    if not str(note.get("summary") or "").strip():
+                        fallback = str(note.get("content") or "").strip() or str(
+                            note.get("transcript") or ""
+                        ).strip()
+                        if fallback:
+                            _request(
+                                "PATCH",
+                                f"/api/notepad/notes/{quote(note_id, safe='')}",
+                                body={"summary": fallback},
+                            )
+                    break
         result = _request(
             "POST",
             f"/api/notepad/notes/{quote(note_id, safe='')}/share",
@@ -271,8 +294,12 @@ NOTEPAD_SCHEMA = {
         "Access the user's Verxio Notepad (same notes as Verxio Web → Notepad). "
         "Use this from chat or messaging (Telegram/Slack/WhatsApp) to list notes, "
         "read a note, create/update notes, generate a summary, or create a public "
-        "summary share URL. Prefer this over inventing local .md files when the "
-        "user asks about their notepad or notes."
+        "summary share URL. "
+        "IMPORTANT: the public share URL displays the `summary` field. When the "
+        "user wants a shareable playbook/digest/document, put that full packaged "
+        "markdown in `summary` (and optionally mirror it in `content`). Prefer "
+        "this over inventing local .md files when the user asks about their "
+        "notepad or notes."
     ),
     "parameters": {
         "type": "object",
@@ -313,7 +340,11 @@ NOTEPAD_SCHEMA = {
             },
             "summary": {
                 "type": "string",
-                "description": "Optional summary markdown (create/update).",
+                "description": (
+                    "Shareable summary markdown shown on the public URL "
+                    "(create/update). Required for useful share links — put the "
+                    "playbook/digest here, not only in content."
+                ),
             },
             "meeting_type": {
                 "type": "string",
