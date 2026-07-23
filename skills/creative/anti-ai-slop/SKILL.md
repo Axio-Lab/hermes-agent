@@ -1,6 +1,6 @@
 ---
 name: anti-ai-slop
-description: "Default Verxio quality law for avoiding generic AI-looking writing and interface design. Use for every UI, copy, docs, chat reply, generated artifact, and final review."
+description: "Default Verxio quality law for avoiding generic AI-looking writing and interface design. Use for every UI, copy, docs, chat reply, generated artifact, and final review; also use when asked to edit, humanize, de-slop, detect, audit, or explain AI-writing patterns in a draft."
 platforms: [linux, macos, windows]
 metadata:
   hermes:
@@ -1555,6 +1555,38 @@ The goal is the same as with UI: make real choices instead of reaching for the
 nearest generic default. Text has its own slop tells, just as recognizable as
 a blue-purple gradient.
 
+## Choose the writing job
+
+Use one of two modes when the user supplies a draft:
+
+**Edit (default).** Preserve the writer's point and recognizable voice. Make
+the minimum effective edit, then return the complete revision and a short
+`What changed` note. Read `references/writing-editor.md` before editing and
+check the result against `references/writing-eval.md`.
+
+**Detect.** When the user asks whether text reads as AI, requests an audit, or
+asks for flags without a rewrite, name each pattern, quote the smallest useful
+excerpt, and suggest a short fix. Do not rewrite unless asked. Do not score the
+text or claim to know whether AI wrote it. Pattern evidence is useful; AI
+authorship guesses are not.
+
+If no draft is present, ask for it. If audience or format would materially
+change the edit, ask one concise question. If the intended effect is unclear,
+ask what the reader should think, feel, or do.
+
+## Preserve the writer
+
+Before editing, identify the point and the voice signals worth keeping:
+vocabulary, cadence, bluntness, humor, uncertainty, digressions, sentence
+fragments, and level of polish. Keep strong human lines unchanged. Do not
+launder useful edge, profanity, opinions, or odd but clear details into safe
+corporate prose. Never invent facts, examples, statistics, quotes, or beliefs.
+
+Clarity does not require flattening. Untangle sentences that are hard to
+follow, but keep clear spoken rhythm and purposeful roughness. Preserve the
+draft's structure unless it blocks the piece, and explain any major
+reorganization in `What changed`.
+
 ## No em dashes, ever
 
 The single biggest tell. If you notice yourself reaching for one, stop and
@@ -1625,6 +1657,18 @@ no template would produce it.
 to" instead of "to": these read as an AI trying to sound formal. Write the way
 a competent person actually talks when they're being clear, not the way a
 press release talks.
+
+## Named patterns and final check
+
+Read `references/writing-editor.md` for the full editing principles and named
+pattern catalog, including binary contrasts, throat-clearing, faux-insight
+setups, colon reveals, superficial `-ing` analysis, importance puffery,
+weasel attribution, fake-strong verbs, synonym cycling, negative listing,
+dramatic fragmentation, rhetorical setups, fake-profound kickers, recap
+endings, and formatting slop.
+
+After an edit, run every check in `references/writing-eval.md`. Fix failures
+before responding. Keep the check internal unless the user asks for it.
 
 
 Distilled from builds that were accepted only after earlier ones were rejected.
@@ -1702,3 +1746,10 @@ animate y, not opacity-to-0.)
 <!-- ═══════════════════════════════════════════════════════════════════════ -->
 <!--  END — the verxio anti-slop  law  ·                                      -->
 <!-- ═══════════════════════════════════════════════════════════════════════ -->
+
+## Writing-method credit
+
+The edit/detect workflow, minimum-effective-edit principle, named writing
+patterns, and evaluation structure are adapted from Peter Yang's
+`petergyang/no-ai-slop`, used under the MIT License. See
+`references/no-ai-slop-license.txt`.
