@@ -139,6 +139,38 @@ class TestProviderModelIdsPreferred:
         assert captured["models"][0] == "kimi-k2.7-code"
 
 
+class TestInferenceProviderCompatibility:
+    def test_groq_stt_key_does_not_create_inference_picker_row(self, monkeypatch):
+        """A speech-only Groq key must not advertise an unrunnable agent provider."""
+        from hermes_cli.model_switch import list_authenticated_providers
+
+        monkeypatch.setenv("GROQ_API_KEY", "gsk-stt-only")
+
+        with (
+            patch(
+                "agent.models_dev.fetch_models_dev",
+                return_value={
+                    "groq": {
+                        "env": ["GROQ_API_KEY"],
+                        "name": "Groq",
+                        "models": {
+                            "llama-3.3-70b-versatile": {
+                                "tool_call": True,
+                            }
+                        },
+                    }
+                },
+            ),
+            patch(
+                "hermes_cli.models.cached_provider_model_ids",
+                return_value=["llama-3.3-70b-versatile"],
+            ),
+        ):
+            providers = list_authenticated_providers()
+
+        assert all(provider["slug"] != "groq" for provider in providers)
+
+
 class TestOpenRouterAndNousUnchanged:
     """Per Teknium: openrouter and nous are NEVER merged with models.dev."""
 

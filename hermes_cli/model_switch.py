@@ -1284,6 +1284,7 @@ def list_authenticated_providers(
         get_provider_info as _mdev_pinfo,
     )
     from hermes_cli.auth import PROVIDER_REGISTRY
+    from hermes_cli.auth import is_known_auth_provider
     from hermes_cli.models import (
         OPENROUTER_MODELS, _PROVIDER_MODELS,
         _MODELS_DEV_PREFERRED, _merge_with_models_dev, cached_provider_model_ids,
@@ -1438,6 +1439,15 @@ def list_authenticated_providers(
             and _alias_target != hermes_id
             and _alias_target in _AGG_PROVIDERS
         ):
+            continue
+        # models.dev includes vendors that Hermes can identify for metadata
+        # and endpoint credential forwarding without supporting them as named
+        # agent providers. A shared env var can otherwise create a phantom
+        # picker row: GROQ_API_KEY is valid for Hermes STT, but `provider:
+        # groq` is rejected by the inference runtime. Only expose slugs the
+        # runtime auth resolver can initialize (plus OpenRouter, which is
+        # intentionally handled outside PROVIDER_REGISTRY).
+        if hermes_id != "openrouter" and not is_known_auth_provider(hermes_id):
             continue
         # Skip aliases that map to the same models.dev provider (e.g.
         # kimi-coding and kimi-coding-cn both → kimi-for-coding).
