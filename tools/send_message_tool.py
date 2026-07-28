@@ -6,6 +6,7 @@ human-friendly channel names to IDs. Works in both CLI and gateway contexts.
 """
 
 import asyncio
+import copy
 import json
 import logging
 import os
@@ -163,6 +164,10 @@ SEND_MESSAGE_SCHEMA = {
             "message": {
                 "type": "string",
                 "description": "The message text to send. To send an image or file, include MEDIA:<local_path> (e.g. 'MEDIA:/tmp/report.pdf') in the message — the platform will deliver it as a native media attachment."
+            },
+            "connection_id": {
+                "type": "string",
+                "description": "Optional configured connection id when a platform has multiple bots or accounts."
             },
             "emoji": {
                 "type": "string",
@@ -371,6 +376,13 @@ def _handle_send(args):
         else:
             return tool_error(f"Platform '{platform_name}' is not configured. Set up credentials in ~/.hermes/config.yaml or environment variables.")
 
+    connection_id = str(args.get("connection_id") or "").strip()
+    if connection_id and connection_id != "default":
+        try:
+            pconfig = _platform_config_for_connection(platform_name, pconfig, connection_id)
+        except ValueError as exc:
+            return tool_error(str(exc))
+
     from gateway.platforms.base import BasePlatformAdapter
 
     # Capture [[as_document]] directive before extract_media strips it.
@@ -470,6 +482,52 @@ def _handle_send(args):
         return json.dumps(result)
     except Exception as e:
         return json.dumps(_error(f"Send failed: {e}"))
+
+
+def _platform_config_for_connection(platform_name, pconfig, connection_id):
+    """Clone platform config with credentials for one configured connection."""
+    from gateway.connections import (
+        CONNECTION_SCOPED_ENV_KEYS,
+        MULTI_ACCOUNT_PLATFORMS,
+        PRIMARY_CREDENTIAL_ENV,
+        connection_env_key,
+        load_connections_for_platform,
+    )
+    from hermes_cli.config import load_env
+
+    if platform_name not in MULTI_ACCOUNT_PLATFORMS:
+        raise ValueError(f"Platform '{platform_name}' does not support multiple connections.")
+
+    env = load_env()
+    records = load_connections_for_platform(platform_name, hydrate_env=False, env=env)
+    record = next((item for item in records if item.id == connection_id and item.enabled), None)
+    if record is None:
+        raise ValueError(f"Connection '{connection_id}' is not enabled for {platform_name}.")
+
+    selected = copy.deepcopy(pconfig)
+    primary_key = PRIMARY_CREDENTIAL_ENV.get(platform_name)
+    if primary_key and primary_key != "WHATSAPP_ENABLED":
+        credential = str(env.get(connection_env_key(primary_key, connection_id)) or "").strip()
+        if not credential:
+            raise ValueError(f"Connection '{connection_id}' has no configured credentials for {platform_name}.")
+        selected.token = credential
+
+    selected.extra = dict(getattr(selected, "extra", {}) or {})
+    selected.extra.update(record.meta)
+    if platform_name == "whatsapp_cloud":
+        scoped_values = {
+            key: str(env.get(connection_env_key(key, connection_id)) or "").strip()
+            for key in CONNECTION_SCOPED_ENV_KEYS["whatsapp_cloud"]
+        }
+        if not all(scoped_values.values()):
+            raise ValueError(f"Connection '{connection_id}' has incomplete WhatsApp Cloud credentials.")
+        selected.extra.update(
+            {
+                "access_token": scoped_values["WHATSAPP_CLOUD_ACCESS_TOKEN"],
+                "phone_number_id": scoped_values["WHATSAPP_CLOUD_PHONE_NUMBER_ID"],
+            }
+        )
+    return selected
 
 
 def _parse_target_ref(platform_name: str, target_ref: str):

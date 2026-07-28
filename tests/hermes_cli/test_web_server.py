@@ -1673,6 +1673,73 @@ class TestWebServerEndpoints:
         assert telegram["enabled"] is False
         assert any(field["key"] == "TELEGRAM_BOT_TOKEN" and field["required"] for field in telegram["env_vars"])
 
+    def test_send_messaging_delivery_uses_selected_telegram_connection(self, monkeypatch):
+        calls = []
+
+        def fake_send_message_tool(payload):
+            calls.append(payload)
+            return json.dumps({"success": True, "platform": "telegram", "message_id": "msg_1"})
+
+        monkeypatch.setattr("tools.send_message_tool.send_message_tool", fake_send_message_tool)
+
+        resp = self.client.post(
+            "/api/messaging/send",
+            json={
+                "platform": "telegram",
+                "connection_id": "conn_reports",
+                "destination": "-100123456",
+                "message": "Daily operations report",
+            },
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["message_id"] == "msg_1"
+        assert calls == [
+            {
+                "action": "send",
+                "connection_id": "conn_reports",
+                "message": "Daily operations report",
+                "target": "telegram:-100123456",
+            }
+        ]
+
+    def test_send_messaging_delivery_surfaces_gateway_error(self, monkeypatch):
+        monkeypatch.setattr(
+            "tools.send_message_tool.send_message_tool",
+            lambda _payload: json.dumps({"error": "Telegram rejected the target."}),
+        )
+
+        resp = self.client.post(
+            "/api/messaging/send",
+            json={"platform": "telegram", "destination": "invalid", "message": "Report"},
+        )
+
+        assert resp.status_code == 502
+        assert resp.json()["detail"] == "Telegram rejected the target."
+
+    def test_selected_telegram_connection_uses_scoped_token(self, monkeypatch):
+        from gateway.connections import ConnectionRecord
+        import gateway.connections as connections
+        import hermes_cli.config as hermes_config
+        from tools.send_message_tool import _platform_config_for_connection
+
+        monkeypatch.setattr(
+            hermes_config,
+            "load_env",
+            lambda: {"TELEGRAM_BOT_TOKEN__CONN_CONN_REPORTS": "reports-token"},
+        )
+        monkeypatch.setattr(
+            connections,
+            "load_connections_for_platform",
+            lambda *_args, **_kwargs: [ConnectionRecord(id="conn_reports", label="Reports bot", enabled=True)],
+        )
+        original = SimpleNamespace(token="default-token", extra={}, enabled=True)
+
+        selected = _platform_config_for_connection("telegram", original, "conn_reports")
+
+        assert selected.token == "reports-token"
+        assert original.token == "default-token"
+
     def test_slack_messaging_platform_exposes_user_allowlist(self):
         resp = self.client.get("/api/messaging/platforms")
 

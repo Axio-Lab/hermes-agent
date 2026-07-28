@@ -29,6 +29,7 @@ from gateway.config import Platform
 from tools.send_message_tool import (
     _is_telegram_thread_not_found,
     _parse_target_ref,
+    _platform_config_for_connection,
     _send_matrix_via_adapter,
     _send_signal,
     _send_telegram,
@@ -186,6 +187,29 @@ def _make_config():
         platforms={Platform.TELEGRAM: telegram_cfg},
         get_home_channel=lambda _platform: None,
     ), telegram_cfg
+
+
+def test_platform_config_for_selected_telegram_connection(monkeypatch):
+    from gateway.connections import ConnectionRecord
+    import hermes_cli.config as hermes_config
+    import gateway.connections as connections
+
+    monkeypatch.setattr(
+        hermes_config,
+        "load_env",
+        lambda: {"TELEGRAM_BOT_TOKEN__CONN_CONN_REPORTS": "reports-token"},
+    )
+    monkeypatch.setattr(
+        connections,
+        "load_connections_for_platform",
+        lambda *_args, **_kwargs: [ConnectionRecord(id="conn_reports", label="Reports bot", enabled=True)],
+    )
+    original = SimpleNamespace(token="default-token", extra={}, enabled=True)
+
+    selected = _platform_config_for_connection("telegram", original, "conn_reports")
+
+    assert selected.token == "reports-token"
+    assert original.token == "default-token"
 
 
 def _install_telegram_mock(monkeypatch, bot):

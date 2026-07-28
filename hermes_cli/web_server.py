@@ -5802,6 +5802,46 @@ class WhatsAppPairingStart(BaseModel):
     connection_id: Optional[str] = None
 
 
+class MessagingSendRequest(BaseModel):
+    platform: str
+    connection_id: str = "default"
+    destination: str = ""
+    message: str
+
+
+@app.post("/api/messaging/send")
+async def send_messaging_delivery(body: MessagingSendRequest, profile: Optional[str] = None):
+    platform = body.platform.strip().lower()
+    destination = body.destination.strip()
+    message = body.message.strip()
+    if not platform or not message:
+        raise HTTPException(status_code=422, detail="Platform and message are required.")
+    target = f"{platform}:{destination}" if destination else platform
+
+    with _profile_scope(profile):
+        from tools.send_message_tool import send_message_tool
+
+        result_text = await asyncio.to_thread(
+            send_message_tool,
+            {
+                "action": "send",
+                "connection_id": body.connection_id.strip() or "default",
+                "message": message,
+                "target": target,
+            },
+        )
+    try:
+        result = json.loads(result_text)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=502, detail="Messaging gateway returned an invalid response.") from exc
+    if not isinstance(result, dict):
+        raise HTTPException(status_code=502, detail="Messaging gateway returned an invalid response.")
+    error = str(result.get("error") or "").strip()
+    if error or result.get("success") is False:
+        raise HTTPException(status_code=502, detail=error or "Messaging gateway delivery failed.")
+    return result
+
+
 @app.post("/api/messaging/whatsapp/pairing/start")
 async def start_whatsapp_pairing(
     body: WhatsAppPairingStart = WhatsAppPairingStart(),
