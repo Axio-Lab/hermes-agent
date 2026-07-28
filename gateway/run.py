@@ -9989,25 +9989,44 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 "chat_id": source.chat_id or "",
                 "thread_id": str(getattr(source, "thread_id", None)) if getattr(source, "thread_id", None) else "",
                 "chat_type": getattr(source, "chat_type", "") or "",
+                "connection_id": getattr(source, "connection_id", None) or "default",
                 "session_id": session_entry.session_id,
                 "message": message_text[:500],
+                "message_full": message_text[:50000],
+                "message_id": str(getattr(event, "message_id", None) or ""),
             }
-            await self.hooks.emit("agent:start", hook_ctx)
+            from gateway.verxio_workflow_hook import handle_verxio_workflow
 
-            # Run the agent
-            agent_result = await self._run_agent(
-                message=message_text,
-                context_prompt=context_prompt,
-                history=history,
-                source=source,
-                session_id=session_entry.session_id,
-                session_key=session_key,
-                run_generation=run_generation,
-                event_message_id=self._reply_anchor_for_event(event),
-                channel_prompt=event.channel_prompt,
-                persist_user_message=persist_user_message,
-                persist_user_timestamp=persist_user_timestamp,
+            verxio_result = await handle_verxio_workflow("agent:start", hook_ctx)
+            await self.hooks.emit("agent:start", hook_ctx)
+            handled_hook = (
+                verxio_result
+                if isinstance(verxio_result, dict) and verxio_result.get("handled") is True
+                else None
             )
+
+            if handled_hook is not None:
+                agent_result = {
+                    "api_calls": 0,
+                    "final_response": str(handled_hook.get("response") or ""),
+                    "messages": [],
+                    "stop_reason": str(handled_hook.get("source") or "gateway_hook"),
+                }
+            else:
+                # Run the default gateway agent when no trigger claimed the message.
+                agent_result = await self._run_agent(
+                    message=message_text,
+                    context_prompt=context_prompt,
+                    history=history,
+                    source=source,
+                    session_id=session_entry.session_id,
+                    session_key=session_key,
+                    run_generation=run_generation,
+                    event_message_id=self._reply_anchor_for_event(event),
+                    channel_prompt=event.channel_prompt,
+                    persist_user_message=persist_user_message,
+                    persist_user_timestamp=persist_user_timestamp,
+                )
 
             # Stop persistent typing indicator now that the agent is done
             try:
