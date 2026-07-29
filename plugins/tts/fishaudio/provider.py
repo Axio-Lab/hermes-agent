@@ -14,9 +14,16 @@ from plugins._fishaudio_common import (
     request_bytes,
     request_json,
 )
+from plugins.tts.fishaudio.audit import audit_event
 from plugins.tts.fishaudio.stream import (
     FishAudioTTSStreamSession,
     build_start_request,
+)
+from plugins.tts.fishaudio.usage import (
+    check_and_consume,
+    record_failure,
+    record_success,
+    request_slot,
 )
 
 logger = logging.getLogger(__name__)
@@ -213,12 +220,15 @@ class FishAudioTTSProvider(TTSProvider):
         format: str = DEFAULT_OUTPUT_FORMAT,
         **extra: Any,
     ) -> str:
+        import time
+
         clean_text = (text or "").strip()
         if not clean_text:
             raise ValueError("text is required for Fish Audio TTS")
         if not api_key():
             raise RuntimeError("FISH_AUDIO_API_KEY is not set")
 
+        check_and_consume("tts_chars", len(clean_text))
         config = _load_provider_config()
         resolved_format = self._resolve_format(format, output_path)
         resolved_model = str(
@@ -275,15 +285,40 @@ class FishAudioTTSProvider(TTSProvider):
             payload["prosody"] = prosody
 
         timeout = self._number(config.get("timeout", DEFAULT_TIMEOUT_SECONDS), DEFAULT_TIMEOUT_SECONDS)
-        status, audio, _headers = request_bytes(
-            "POST",
-            "v1/tts",
-            body=payload,
-            headers={"model": resolved_model},
-            timeout=max(1.0, min(timeout, 300.0)),
-            max_bytes=25 * 1024 * 1024,
-        )
+        started = time.monotonic()
+        try:
+            with request_slot():
+                status, audio, _headers = request_bytes(
+                    "POST",
+                    "v1/tts",
+                    body=payload,
+                    headers={"model": resolved_model},
+                    timeout=max(1.0, min(timeout, 300.0)),
+                    max_bytes=25 * 1024 * 1024,
+                )
+        except Exception as exc:
+            record_failure()
+            audit_event(
+                op="tts.synthesize",
+                outcome="error",
+                provider_op="tts",
+                duration_ms=int((time.monotonic() - started) * 1000),
+                units=len(clean_text),
+                error_class=type(exc).__name__,
+            )
+            raise
+        duration_ms = int((time.monotonic() - started) * 1000)
         if status != 200:
+            record_failure()
+            audit_event(
+                op="tts.synthesize",
+                outcome="error",
+                provider_op="tts",
+                http_status=status,
+                duration_ms=duration_ms,
+                units=len(clean_text),
+                error_class="HTTPError",
+            )
             try:
                 detail: Any = json.loads(audio.decode("utf-8", errors="replace"))
             except json.JSONDecodeError:
@@ -292,8 +327,27 @@ class FishAudioTTSProvider(TTSProvider):
                 error_message(detail, f"Fish Audio TTS failed (HTTP {status})")
             )
         if not audio:
+            record_failure()
+            audit_event(
+                op="tts.synthesize",
+                outcome="error",
+                provider_op="tts",
+                http_status=status,
+                duration_ms=duration_ms,
+                units=len(clean_text),
+                error_class="EmptyResponse",
+            )
             raise RuntimeError("Fish Audio returned an empty audio response")
 
+        record_success()
+        audit_event(
+            op="tts.synthesize",
+            outcome="success",
+            provider_op="tts",
+            http_status=status,
+            duration_ms=duration_ms,
+            units=len(clean_text),
+        )
         out = Path(output_path).expanduser().resolve()
         if out.suffix.lower().lstrip(".") not in SUPPORTED_OUTPUT_FORMATS:
             out = out.with_suffix(f".{resolved_format}")

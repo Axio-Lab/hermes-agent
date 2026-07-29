@@ -9,8 +9,17 @@ import stat
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import time
+
 from agent.transcription_provider import TranscriptionProvider
 from plugins._fishaudio_common import api_key, error_message, multipart_post
+from plugins.tts.fishaudio.audit import audit_event
+from plugins.tts.fishaudio.usage import (
+    check_and_consume,
+    record_failure,
+    record_success,
+    request_slot,
+)
 
 ASR_ENDPOINT = "https://api.fish.audio/v1/asr"
 MAX_AUDIO_BYTES = 25 * 1024 * 1024
@@ -248,27 +257,63 @@ class FishAudioTranscriptionProvider(TranscriptionProvider):
             if not isinstance(resolved_ignore, bool):
                 raise ValueError("ignore_timestamps must be true or false")
 
-            status, payload = multipart_post(
-                ASR_ENDPOINT,
-                fields={
-                    "language": resolved_language,
-                    "ignore_timestamps": resolved_ignore,
-                },
-                files=[
-                    (
-                        "audio",
-                        safe_name,
-                        content,
-                        _audio_content_type(Path(safe_name)),
+            check_and_consume("asr_bytes", len(content))
+            started = time.monotonic()
+            try:
+                with request_slot():
+                    status, payload = multipart_post(
+                        ASR_ENDPOINT,
+                        fields={
+                            "language": resolved_language,
+                            "ignore_timestamps": resolved_ignore,
+                        },
+                        files=[
+                            (
+                                "audio",
+                                safe_name,
+                                content,
+                                _audio_content_type(Path(safe_name)),
+                            )
+                        ],
+                        max_bytes=12 * 1024 * 1024,
                     )
-                ],
-                max_bytes=12 * 1024 * 1024,
-            )
+            except Exception as exc:
+                record_failure()
+                audit_event(
+                    op="asr.transcribe",
+                    outcome="error",
+                    provider_op="asr",
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                    units=len(content),
+                    error_class=type(exc).__name__,
+                )
+                raise
+            duration_ms = int((time.monotonic() - started) * 1000)
             if status != 200:
+                record_failure()
+                audit_event(
+                    op="asr.transcribe",
+                    outcome="error",
+                    provider_op="asr",
+                    http_status=status,
+                    duration_ms=duration_ms,
+                    units=len(content),
+                    error_class="HTTPError",
+                )
                 raise RuntimeError(
                     error_message(payload, f"Fish Audio ASR failed (HTTP {status})")
                 )
             text, duration, segments = _parse_response(payload)
+            check_and_consume("asr_duration_sec", duration)
+            record_success()
+            audit_event(
+                op="asr.transcribe",
+                outcome="success",
+                provider_op="asr",
+                http_status=status,
+                duration_ms=duration_ms,
+                units=len(content),
+            )
             return {
                 "success": True,
                 "transcript": text,

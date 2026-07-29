@@ -87,6 +87,13 @@ action unchanged.
 After creation, mention that the provider confirmed `private` visibility.
 Refresh a voice picker when the result contains `refresh_voices: true`.
 
+## Cost, quotas, and ops
+
+Fish API usage consumes Fish account credits. Hermes also enforces local
+profile quotas and writes a redacted ops audit log. See
+[operations.md](references/operations.md) and
+[key-rotation.md](references/key-rotation.md).
+
 ## Pitfalls
 
 - Never pass a filesystem path, URL, model ID supplied outside the owned

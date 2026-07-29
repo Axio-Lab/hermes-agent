@@ -1809,6 +1809,33 @@ DEFAULT_CONFIG = {
     # per-request input-character cap. Omit it to use the provider's documented
     # limit (OpenAI 4096, xAI 15000, MiniMax 10000, ElevenLabs 5k-40k model-aware,
     # Gemini 32000, Edge 5000, Mistral 4000, NeuTTS/KittenTTS 2000).
+    # Fish Audio plugin ops (quotas/audit/retention). Separate from tts.fishaudio
+    # synthesis settings so TTS config stays provider-shaped.
+    "fishaudio": {
+        "quotas": {
+            "enabled": True,
+            "tts_chars_per_day": 500000,
+            "asr_bytes_per_day": 524288000,
+            "asr_minutes_per_day": 600,
+            "voice_create_per_day": 10,
+            "voice_design_per_5m": 3,
+            "voice_persist_per_day": 10,
+            "transcribe_tool_per_day": 100,
+        },
+        "limits": {
+            "max_concurrent_requests": 3,
+            "failure_window_seconds": 300,
+            "max_failures_per_window": 8,
+        },
+        "audit": {
+            "enabled": True,
+        },
+        "retention": {
+            "audit_max_bytes": 10485760,
+            "audit_rotate_keep": 3,
+            "tombstone_max_entries": 500,
+        },
+    },
     "tts": {
         "provider": "edge",  # "edge" (free) | "elevenlabs" | "openai" | "xai" | "minimax" | "mistral" | "gemini" | "fishaudio" | local providers
         "edge": {
@@ -1840,6 +1867,7 @@ DEFAULT_CONFIG = {
             "stream_idle_timeout": 60,
             "stream_total_timeout": 300,
             "max_concurrent_streams": 4,
+            "max_text_length": 4000,
         },
         "gemini": {
             "model": "gemini-2.5-flash-preview-tts",

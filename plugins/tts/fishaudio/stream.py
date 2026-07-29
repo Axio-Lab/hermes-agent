@@ -123,6 +123,14 @@ class FishAudioTTSStreamSession:
                 )
             self._text_chars = next_total
         try:
+            from plugins.tts.fishaudio.usage import check_and_consume
+
+            check_and_consume("tts_chars", len(clean))
+        except Exception:
+            with self._lock:
+                self._text_chars = max(0, self._text_chars - len(clean))
+            raise
+        try:
             self._cmds.put_nowait(("text", clean))
         except queue.Full as exc:
             raise RuntimeError("Fish Audio stream backpressured") from exc

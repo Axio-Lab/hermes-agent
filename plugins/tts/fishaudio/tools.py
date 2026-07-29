@@ -31,9 +31,11 @@ from plugins._fishaudio_common import (
     multipart_post,
     request_json,
 )
+from plugins.tts.fishaudio.audit import audit_event
 from plugins.tts.fishaudio.transcription_provider import (
     FishAudioTranscriptionProvider,
 )
+from plugins.tts.fishaudio.usage import check_and_consume, request_slot
 
 TOOLSET = "fishaudio"
 LEDGER_VERSION = 1
@@ -93,6 +95,16 @@ def _load_ledger() -> dict[str, Any]:
         return data
 
 
+def _tombstone_max() -> int:
+    try:
+        from hermes_cli.config import load_config
+
+        section = (load_config().get("fishaudio") or {}).get("retention") or {}
+        return max(50, min(5000, int(section.get("tombstone_max_entries", 500))))
+    except Exception:
+        return 500
+
+
 def _save_ledger(data: dict[str, Any]) -> None:
     path = _ledger_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -100,6 +112,9 @@ def _save_ledger(data: dict[str, Any]) -> None:
         os.chmod(path.parent, 0o700)
     except OSError:
         pass
+    tombstones = data.get("tombstones")
+    if isinstance(tombstones, list) and len(tombstones) > _tombstone_max():
+        data["tombstones"] = tombstones[-_tombstone_max() :]
     tmp = path.with_suffix(f".tmp-{secrets.token_hex(4)}")
     payload = json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     with _lock:
@@ -315,18 +330,49 @@ def _remove_preview(handle: str) -> bool:
 
 
 def _consume_voice_design_quota(ctx: dict[str, str]) -> None:
-    now = time.time()
-    key = f"{get_hermes_home()}:{ctx['actor']}:{ctx['session']}"
     with _lock:
         _prune_transient()
-        timestamps = _design_requests.setdefault(key, [])
-        if len(timestamps) >= MAX_VOICE_DESIGN_REQUESTS_PER_WINDOW:
-            raise RuntimeError(
-                "Fish Audio voice design is limited to "
-                f"{MAX_VOICE_DESIGN_REQUESTS_PER_WINDOW} requests every "
-                f"{VOICE_DESIGN_REQUEST_WINDOW_SECONDS // 60} minutes per session"
-            )
-        timestamps.append(now)
+    check_and_consume(
+        "voice_design",
+        1,
+        session_key=f"{ctx.get('actor')}:{ctx.get('session')}",
+    )
+
+
+def gc_fishaudio_artifacts() -> int:
+    """Remove orphaned design-preview files older than the preview TTL.
+
+    Returns the number of files deleted. Safe to call at plugin register time.
+    """
+    root = _preview_artifact_root()
+    if not root.is_dir():
+        return 0
+    removed = 0
+    cutoff = time.time() - PREVIEW_TTL_SECONDS
+    with _lock:
+        live_paths = {
+            str(Path(entry["artifact_path"]).resolve())
+            for entry in _previews.values()
+            if isinstance(entry.get("artifact_path"), str)
+        }
+        try:
+            candidates = list(root.iterdir())
+        except OSError:
+            return 0
+        for path in candidates:
+            try:
+                if not path.is_file():
+                    continue
+                resolved = str(path.resolve())
+                if resolved in live_paths:
+                    continue
+                if path.stat().st_mtime > cutoff:
+                    continue
+                path.unlink(missing_ok=True)
+                removed += 1
+            except OSError:
+                continue
+    return removed
 
 
 def _resolve_attachment(handle: str, ctx: dict[str, str]) -> dict[str, Any]:
@@ -708,6 +754,7 @@ def fishaudio_transcribe(args: dict[str, Any], **_: Any) -> str:
         ctx = _context()
         if not ctx["session"]:
             raise PermissionError("Fish transcription requires an active session")
+        check_and_consume("transcribe_tool", 1)
         handle = str(args.get("attachment_handle") or "").strip()
         attachment = _resolve_attachment(handle, ctx)
         language = args.get("language")
@@ -723,11 +770,27 @@ def fishaudio_transcribe(args: dict[str, Any], **_: Any) -> str:
             ignore_timestamps=ignore_timestamps,
         )
         if not result.get("success"):
+            audit_event(
+                op="tool.transcribe",
+                outcome="error",
+                provider_op="asr",
+                session_id=ctx.get("session"),
+                actor=ctx.get("actor"),
+                error_class="RuntimeError",
+            )
             return _json_result(
                 success=False,
                 error=str(result.get("error") or "Fish Audio transcription failed"),
                 error_type="RuntimeError",
             )
+        audit_event(
+            op="tool.transcribe",
+            outcome="success",
+            provider_op="asr",
+            session_id=ctx.get("session"),
+            actor=ctx.get("actor"),
+            units=1,
+        )
         return _json_result(
             success=True,
             transcript=str(result.get("transcript") or ""),
@@ -925,23 +988,34 @@ def fishaudio_voice_design_persist(args: dict[str, Any], **_: Any) -> str:
         receipt = _receipt_digest(confirmed)
         if not api_key():
             raise RuntimeError("FISH_AUDIO_API_KEY is not set")
-        status, payload = multipart_post(
-            "model",
-            fields={
-                "title": alias,
-                "visibility": "private",
-                "type": "tts",
-                "train_mode": "fast",
-                "enhance_audio_quality": True,
-            },
-            files=[
-                (
-                    "voices",
-                    "voice-design-preview.wav",
-                    bytes(preview["audio"]),
-                    "audio/wav",
-                )
-            ],
+        check_and_consume("voice_persist", 1)
+        with request_slot():
+            status, payload = multipart_post(
+                "model",
+                fields={
+                    "title": alias,
+                    "visibility": "private",
+                    "type": "tts",
+                    "train_mode": "fast",
+                    "enhance_audio_quality": True,
+                },
+                files=[
+                    (
+                        "voices",
+                        "voice-design-preview.wav",
+                        bytes(preview["audio"]),
+                        "audio/wav",
+                    )
+                ],
+            )
+        audit_event(
+            op="tool.voice_persist",
+            outcome="success" if status in {200, 201} else "error",
+            provider_op="model",
+            http_status=status,
+            session_id=ctx.get("session"),
+            actor=ctx.get("actor"),
+            units=1,
         )
         if status not in {200, 201}:
             raise RuntimeError(
@@ -1041,18 +1115,29 @@ def fishaudio_voice_create(args: dict[str, Any], **_: Any) -> str:
         receipt = _receipt_digest(confirmed)
         if not api_key():
             raise RuntimeError("FISH_AUDIO_API_KEY is not set")
+        check_and_consume("voice_create", 1)
         path = Path(attachment["path"])
         content = _read_attachment_bytes(attachment)
-        status, payload = multipart_post(
-            "model",
-            fields={
-                "title": alias,
-                "visibility": "private",
-                "type": "tts",
-                "train_mode": "fast",
-                "enhance_audio_quality": True,
-            },
-            files=[("voices", path.name, content, _audio_content_type(path))],
+        with request_slot():
+            status, payload = multipart_post(
+                "model",
+                fields={
+                    "title": alias,
+                    "visibility": "private",
+                    "type": "tts",
+                    "train_mode": "fast",
+                    "enhance_audio_quality": True,
+                },
+                files=[("voices", path.name, content, _audio_content_type(path))],
+            )
+        audit_event(
+            op="tool.voice_create",
+            outcome="success" if status in {200, 201} else "error",
+            provider_op="model",
+            http_status=status,
+            session_id=ctx.get("session"),
+            actor=ctx.get("actor"),
+            units=1,
         )
         if status not in {200, 201}:
             raise RuntimeError(

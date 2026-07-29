@@ -22,3 +22,9 @@ def register(ctx) -> None:
             requires_env=["FISH_AUDIO_API_KEY"],
             emoji=emoji,
         )
+    try:
+        from plugins.tts.fishaudio.tools import gc_fishaudio_artifacts
+
+        gc_fishaudio_artifacts()
+    except Exception:
+        pass

@@ -117,13 +117,23 @@ class TestStreamSessionProtocol:
         audio_chunks = []
         ended = threading.Event()
         end_reason = {}
+        release_audio = threading.Event()
+
+        class GatedWS(FakeWS):
+            async def recv(self):
+                # Wait until the client has sent text/flush/stop so outbound
+                # framing is observable before the server finish event.
+                await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: release_audio.wait(timeout=5.0)
+                )
+                return await super().recv()
 
         frames = [
             msgpack.packb({"event": "audio", "audio": b"abc"}, use_bin_type=True),
             msgpack.packb({"event": "audio", "audio": b"def"}, use_bin_type=True),
             msgpack.packb({"event": "finish"}, use_bin_type=True),
         ]
-        fake_ws = FakeWS(frames)
+        fake_ws = GatedWS(frames)
 
         async def fake_connect(*_a, **_k):
             return fake_ws
@@ -150,6 +160,7 @@ class TestStreamSessionProtocol:
             session.send_text("Hello world.")
             session.flush()
             session.stop(cancel=False)
+            release_audio.set()
             assert ended.wait(timeout=5.0)
 
         assert audio_chunks == [b"abc", b"def"]

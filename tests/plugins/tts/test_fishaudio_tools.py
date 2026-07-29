@@ -266,7 +266,14 @@ def test_voice_design_discard_removes_scoped_artifact():
 
 
 def test_voice_design_request_quota_is_session_scoped(monkeypatch):
-    monkeypatch.setattr(tools, "MAX_VOICE_DESIGN_REQUESTS_PER_WINDOW", 2)
+    from plugins.tts.fishaudio import usage
+
+    monkeypatch.setattr(
+        usage,
+        "quota_config",
+        lambda: {**usage.DEFAULT_QUOTAS, "voice_design_per_5m": 2},
+    )
+    usage.reset_for_tests()
     with patch.object(
         tools, "request_json", return_value=(200, _voice_design_payload())
     ) as request:
@@ -288,7 +295,7 @@ def test_voice_design_request_quota_is_session_scoped(monkeypatch):
         )
 
     assert denied["success"] is False
-    assert "limited to 2 requests" in denied["error"]
+    assert "rate limit" in denied["error"].lower() or "quota" in denied["error"].lower()
     assert request.call_count == 2
 
 
