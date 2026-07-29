@@ -589,12 +589,17 @@ _SCHEMA_OVERRIDES: Dict[str, Dict[str, Any]] = {
         "description": "Speech-to-text provider",
         # "mistral" temporarily removed — mistralai PyPI package quarantined
         # (malicious 2.4.6 release on 2026-05-12). Restore once available.
-        "options": ["local", "groq", "openai", "xai", "elevenlabs"],
+        "options": ["local", "groq", "openai", "xai", "elevenlabs", "fishaudio"],
     },
     "stt.elevenlabs.model_id": {
         "type": "select",
         "description": "ElevenLabs Scribe model",
         "options": ["scribe_v2", "scribe_v1"],
+    },
+    "stt.fishaudio.model": {
+        "type": "select",
+        "description": "Fish Audio beta whole-file ASR",
+        "options": ["fish-audio-asr-beta"],
     },
     "display.skin": {
         "type": "select",

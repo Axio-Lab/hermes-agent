@@ -246,6 +246,7 @@ def multipart_post(
     headers: Optional[Dict[str, str]] = None,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     key: Optional[str] = None,
+    max_bytes: int = DEFAULT_MAX_JSON_BYTES,
 ) -> Tuple[int, Dict[str, Any]]:
     """POST multipart/form-data to Fish Audio.
 
@@ -313,10 +314,10 @@ def multipart_post(
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as resp:
-            raw_bytes = resp.read(DEFAULT_MAX_JSON_BYTES + 1)
-            if len(raw_bytes) > DEFAULT_MAX_JSON_BYTES:
+            raw_bytes = resp.read(max_bytes + 1)
+            if len(raw_bytes) > max_bytes:
                 raise RuntimeError(
-                    f"Fish Audio JSON response exceeded {DEFAULT_MAX_JSON_BYTES} bytes"
+                    f"Fish Audio JSON response exceeded {max_bytes} bytes"
                 )
             raw = raw_bytes.decode("utf-8") or "{}"
             try:

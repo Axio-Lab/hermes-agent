@@ -1,10 +1,11 @@
 name: fishaudio
 version: 1.0.0
-description: "Fish Audio text-to-speech with consent-gated private voice cloning."
+description: "Fish Audio text-to-speech, whole-file ASR, and consent-gated private voice cloning."
 author: Axio Lab
 license: MIT
 kind: backend
 provides_tools:
+  - fishaudio_transcribe
   - fishaudio_voice_design_preview
   - fishaudio_voice_design_persist
   - fishaudio_voice_design_discard

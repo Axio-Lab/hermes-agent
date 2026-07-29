@@ -31,6 +31,9 @@ from plugins._fishaudio_common import (
     multipart_post,
     request_json,
 )
+from plugins.tts.fishaudio.transcription_provider import (
+    FishAudioTranscriptionProvider,
+)
 
 TOOLSET = "fishaudio"
 LEDGER_VERSION = 1
@@ -699,6 +702,42 @@ def _required_text(args: dict[str, Any], name: str, maximum: int) -> str:
     return value
 
 
+def fishaudio_transcribe(args: dict[str, Any], **_: Any) -> str:
+    """Transcribe one already-authorized attachment handle."""
+    try:
+        ctx = _context()
+        if not ctx["session"]:
+            raise PermissionError("Fish transcription requires an active session")
+        handle = str(args.get("attachment_handle") or "").strip()
+        attachment = _resolve_attachment(handle, ctx)
+        language = args.get("language")
+        ignore_timestamps = args.get("ignore_timestamps", False)
+        if not isinstance(ignore_timestamps, bool):
+            raise ValueError("ignore_timestamps must be true or false")
+
+        content = _read_attachment_bytes(attachment)
+        result = FishAudioTranscriptionProvider().transcribe_authorized_audio(
+            content,
+            filename=Path(attachment["path"]).name,
+            language=str(language).strip() if language is not None else None,
+            ignore_timestamps=ignore_timestamps,
+        )
+        if not result.get("success"):
+            return _json_result(
+                success=False,
+                error=str(result.get("error") or "Fish Audio transcription failed"),
+                error_type="RuntimeError",
+            )
+        return _json_result(
+            success=True,
+            transcript=str(result.get("transcript") or ""),
+            duration=result.get("duration", 0.0),
+            segments=result.get("segments") or [],
+        )
+    except Exception as exc:
+        return _error(exc)
+
+
 def fishaudio_voice_design_preview(args: dict[str, Any], **_: Any) -> str:
     try:
         ctx, _ledger = _authorize()
@@ -1235,6 +1274,29 @@ CREATE_SCHEMA = {
         "required": ["attachment_handle", "alias"],
     },
 }
+TRANSCRIBE_SCHEMA = {
+    "name": "fishaudio_transcribe",
+    "description": "Transcribe an authorized, scoped Fish Audio attachment handle. Raw paths and URLs are never accepted.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "attachment_handle": {
+                "type": "string",
+                "description": "Opaque fishatt_ handle supplied by Hermes for an uploaded audio file.",
+            },
+            "language": {
+                "type": "string",
+                "description": "Optional BCP-47 language hint such as en or en-US.",
+            },
+            "ignore_timestamps": {
+                "type": "boolean",
+                "default": False,
+                "description": "Ask Fish Audio to omit timestamp detail.",
+            },
+        },
+        "required": ["attachment_handle"],
+    },
+}
 DESIGN_PREVIEW_SCHEMA = {
     "name": "fishaudio_voice_design_preview",
     "description": "Generate short Fish Audio voice-design previews from a description and script. Returns scoped, expiring preview handles instead of audio bytes or paths.",
@@ -1356,6 +1418,7 @@ DELETE_SCHEMA = {
 }
 
 REGISTERED_TOOLS = (
+    ("fishaudio_transcribe", TRANSCRIBE_SCHEMA, fishaudio_transcribe, "📝"),
     (
         "fishaudio_voice_design_preview",
         DESIGN_PREVIEW_SCHEMA,

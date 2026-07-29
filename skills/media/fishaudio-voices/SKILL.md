@@ -13,9 +13,9 @@ metadata:
 
 # Fish Audio Voices Skill
 
-Design, create, and manage private Fish Audio voices. The backend enforces
-ownership, session scope, privacy, expiry, and confirmation; these
-instructions explain the safe interaction.
+Transcribe scoped audio attachments and design, create, or manage private Fish
+Audio voices. The backend enforces ownership, session scope, privacy, expiry,
+and confirmation; these instructions explain the safe interaction.
 
 ## When to Use
 
@@ -23,6 +23,7 @@ instructions explain the safe interaction.
 - The user asks to explore a voice from a written description and preview
   script before saving it.
 - The user asks to list, inspect, select, or delete one of their Fish voices.
+- The user explicitly asks to transcribe an existing uploaded audio attachment.
 - Do not infer consent from an attachment alone.
 
 ## Prerequisites
@@ -30,6 +31,7 @@ instructions explain the safe interaction.
 - Fish Audio must be configured with `FISH_AUDIO_API_KEY`.
 - The Fish Audio plugin and its `fishaudio` toolset must be enabled.
 - Creation requires an opaque `fishatt_` attachment handle issued by Hermes.
+- Explicit transcription also accepts only that scoped `fishatt_` handle.
 
 ## How to Run
 
@@ -42,6 +44,12 @@ instructions explain the safe interaction.
 
 Deletion follows the same two-turn confirmation flow with
 `fishaudio_voice_delete`.
+
+For explicit whole-file transcription, call `fishaudio_transcribe` with the
+unchanged `fishatt_` handle. Optionally supply a BCP-47 language hint and
+`ignore_timestamps`. This is buffered whole-file ASR, not streaming. Automatic
+Notepad, chat microphone, voice-mode, and gateway transcription instead use
+the normal STT path when `stt.provider: fishaudio`.
 
 For prompt-driven design:
 
@@ -59,6 +67,7 @@ For prompt-driven design:
 ## Quick Reference
 
 - `fishaudio_voice_create`: private creation from a scoped audio handle.
+- `fishaudio_transcribe`: whole-file ASR from a scoped audio handle.
 - `fishaudio_voice_design_preview`: generate expiring scoped candidates.
 - `fishaudio_voice_design_persist`: privately save a selected candidate.
 - `fishaudio_voice_design_discard`: remove rejected current-session previews.
@@ -81,7 +90,8 @@ Refresh a voice picker when the result contains `refresh_voices: true`.
 ## Pitfalls
 
 - Never pass a filesystem path, URL, model ID supplied outside the owned
-  catalog, transcript, or raw audio bytes to these tools.
+  catalog, transcript, or raw audio bytes to these tools. Transcription
+  requires the existing scoped handle and never accepts a path.
 - `fishpreview_` handles are short-lived and bound to the originating actor,
   session, and profile. Generate a new preview after expiry.
 - Never fabricate, paraphrase, or automatically echo a confirmation as user
@@ -93,6 +103,8 @@ Refresh a voice picker when the result contains `refresh_voices: true`.
 ## Verification
 
 - Creation reports `visibility: private` and a voice ID.
+- Transcription reports only transcript text, duration, and normalized
+  timestamp segments; it does not expose the source path or provider body.
 - Voice design returns opaque handles, bounded metadata, and short-lived
   generated audio attachments.
 - Persisting a selected preview reports `visibility: private`.
