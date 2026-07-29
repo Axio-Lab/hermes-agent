@@ -997,6 +997,7 @@ class TestWebServerEndpoints:
         assert "/api/audio/transcribe" in paths
         assert "/api/audio/speak" in paths
         assert "/api/audio/elevenlabs/voices" in paths
+        assert "/api/audio/fishaudio/voices" in paths
 
     def test_elevenlabs_voices_unavailable_without_key(self, monkeypatch):
         import hermes_cli.web_server as web_server
@@ -1005,6 +1006,17 @@ class TestWebServerEndpoints:
         monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
 
         resp = self.client.get("/api/audio/elevenlabs/voices")
+        assert resp.status_code == 200
+        assert resp.json() == {"available": False, "voices": []}
+
+    def test_fishaudio_voices_unavailable_without_key(self, monkeypatch):
+        import hermes_cli.web_server as web_server
+
+        monkeypatch.setattr(web_server, "load_env", lambda: {})
+        monkeypatch.delenv("FISH_AUDIO_API_KEY", raising=False)
+        monkeypatch.delenv("FISH_API_KEY", raising=False)
+
+        resp = self.client.get("/api/audio/fishaudio/voices")
         assert resp.status_code == 200
         assert resp.json() == {"available": False, "voices": []}
 

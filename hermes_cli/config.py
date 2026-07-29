@@ -1810,7 +1810,7 @@ DEFAULT_CONFIG = {
     # limit (OpenAI 4096, xAI 15000, MiniMax 10000, ElevenLabs 5k-40k model-aware,
     # Gemini 32000, Edge 5000, Mistral 4000, NeuTTS/KittenTTS 2000).
     "tts": {
-        "provider": "edge",  # "edge" (free) | "elevenlabs" (premium) | "openai" | "xai" | "minimax" | "mistral" | "gemini" | "neutts" (local) | "kittentts" (local) | "piper" (local)
+        "provider": "edge",  # "edge" (free) | "elevenlabs" | "openai" | "xai" | "minimax" | "mistral" | "gemini" | "fishaudio" | local providers
         "edge": {
             "voice": "en-US-AriaNeural",
             # Popular: AriaNeural, JennyNeural, AndrewNeural, BrianNeural, SoniaNeural
@@ -1823,6 +1823,16 @@ DEFAULT_CONFIG = {
             "model": "gpt-4o-mini-tts",
             "voice": "alloy",
             # Voices: alloy, echo, fable, onyx, nova, shimmer
+        },
+        "fishaudio": {
+            "model": "s2.1-pro-free",
+            "reference_id": "",
+            "format": "mp3",
+            "temperature": 0.7,
+            "top_p": 0.7,
+            "sample_rate": 44100,
+            "mp3_bitrate": 128,
+            "timeout": 120,
         },
         "gemini": {
             "model": "gemini-2.5-flash-preview-tts",
@@ -3107,6 +3117,13 @@ OPTIONAL_ENV_VARS = {
         "url": "https://modelstudio.console.alibabacloud.com/",
         "password": True,
         "category": "provider",
+    },
+    "FISH_AUDIO_API_KEY": {
+        "description": "Fish Audio API key for text-to-speech, voices, and transcription",
+        "prompt": "Fish Audio API Key",
+        "url": "https://fish.audio/app/api-keys/",
+        "password": True,
+        "category": "tool",
     },
     "DASHSCOPE_BASE_URL": {
         "description": "Custom DashScope base URL (default: coding-intl OpenAI-compat endpoint)",

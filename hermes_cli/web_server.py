@@ -531,7 +531,7 @@ _SCHEMA_OVERRIDES: Dict[str, Dict[str, Any]] = {
     "tts.provider": {
         "type": "select",
         "description": "Text-to-speech provider",
-        "options": ["edge", "elevenlabs", "openai", "neutts", "dashscope"],
+        "options": ["edge", "elevenlabs", "openai", "neutts", "dashscope", "fishaudio"],
     },
     "tts.dashscope.model": {
         "type": "select",
@@ -547,6 +547,20 @@ _SCHEMA_OVERRIDES: Dict[str, Dict[str, Any]] = {
     "tts.dashscope.voice": {
         "type": "string",
         "description": "DashScope TTS voice id (e.g. Cherry, Serena, Ethan)",
+    },
+    "tts.fishaudio.model": {
+        "type": "select",
+        "description": "Fish Audio speech synthesis model",
+        "options": ["s2.1-pro-free", "s2.1-pro", "s2-pro"],
+    },
+    "tts.fishaudio.reference_id": {
+        "type": "string",
+        "description": "Fish Audio owned or library voice id",
+    },
+    "tts.fishaudio.format": {
+        "type": "select",
+        "description": "Fish Audio output format",
+        "options": ["mp3", "wav", "opus"],
     },
     "image_gen.provider": {
         "type": "select",
@@ -2933,6 +2947,54 @@ async def get_elevenlabs_voices():
             "name": str(voice.get("name") or voice_id),
             "label": _elevenlabs_voice_label(voice),
         })
+
+    voices.sort(key=lambda item: str(item.get("label") or "").lower())
+    return {"available": True, "voices": voices}
+
+
+@app.get("/api/audio/fishaudio/voices")
+async def get_fishaudio_voices():
+    """Return owned Fish Audio voices without exposing the API key."""
+    env = load_env()
+    key = (
+        env.get("FISH_AUDIO_API_KEY")
+        or os.environ.get("FISH_AUDIO_API_KEY")
+        or env.get("FISH_API_KEY")
+        or os.environ.get("FISH_API_KEY")
+        or ""
+    ).strip()
+    if not key:
+        return {"available": False, "voices": []}
+
+    try:
+        from plugins.tts.fishaudio import FishAudioTTSProvider
+
+        loop = asyncio.get_running_loop()
+        entries = await loop.run_in_executor(
+            None, FishAudioTTSProvider().list_voices
+        )
+    except Exception as exc:
+        _log.warning("Fish Audio voice list failed: %s", exc)
+        raise HTTPException(
+            status_code=502, detail="Could not load Fish Audio voices"
+        )
+
+    voices = []
+    for voice in entries:
+        if not isinstance(voice, dict):
+            continue
+        voice_id = str(voice.get("id") or "").strip()
+        if not voice_id:
+            continue
+        voices.append(
+            {
+                "voice_id": voice_id,
+                "name": str(voice.get("display") or voice_id),
+                "label": str(voice.get("display") or voice_id),
+                "state": str(voice.get("state") or ""),
+                "visibility": str(voice.get("visibility") or ""),
+            }
+        )
 
     voices.sort(key=lambda item: str(item.get("label") or "").lower())
     return {"available": True, "voices": voices}
