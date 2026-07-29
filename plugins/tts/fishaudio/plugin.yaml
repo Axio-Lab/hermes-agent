@@ -1,20 +1,15 @@
 name: fishaudio
 version: 1.0.0
-description: "Fish Audio text-to-speech with private and library voices."
+description: "Fish Audio text-to-speech with consent-gated private voice cloning."
 author: Axio Lab
 license: MIT
 kind: backend
-requires_env:
-  - name: FISH_AUDIO_API_KEY
-    description: "Fish Audio API key"
-    url: "https://fish.audio/app/api-keys"
-    secret: true
-name: fishaudio
-version: 1.0.0
-description: "Fish Audio text-to-speech with private voice cloning via FISH_AUDIO_API_KEY."
-author: Axio Lab
-license: MIT
-kind: backend
+provides_tools:
+  - fishaudio_voice_create
+  - fishaudio_voice_list
+  - fishaudio_voice_get
+  - fishaudio_voice_set_default
+  - fishaudio_voice_delete
 requires_env:
   - name: FISH_AUDIO_API_KEY
     description: "Fish Audio API key"

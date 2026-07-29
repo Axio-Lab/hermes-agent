@@ -1483,7 +1483,12 @@ def _cwd_for_session_key(session_key: str) -> str:
     return ""
 
 
-def _set_session_context(session_key: str, cwd: str | None = None) -> list:
+def _set_session_context(
+    session_key: str,
+    cwd: str | None = None,
+    *,
+    user_text: str = "",
+) -> list:
     try:
         from gateway.session_context import set_session_vars
 
@@ -1498,7 +1503,13 @@ def _set_session_context(session_key: str, cwd: str | None = None) -> list:
                 if sess.get("session_key") == session_key:
                     source = _session_source(sess)
                     break
-        return set_session_vars(session_key=session_key, source=source, cwd=resolved)
+        return set_session_vars(
+            session_key=session_key,
+            source=source,
+            chat_type="dm",
+            user_text=user_text,
+            cwd=resolved,
+        )
     except Exception:
         return []
 
@@ -3497,8 +3508,18 @@ def _agent_cbs(sid: str) -> dict:
 def _wire_callbacks(sid: str):
     from tools.terminal_tool import set_sudo_password_callback
     from tools.skills_tool import set_secret_capture_callback
+    from plugins.tts.fishaudio.tools import register_confirmation_callback
 
     set_sudo_password_callback(lambda: _block("sudo.request", sid, {}, timeout=120))
+    register_confirmation_callback(
+        sid,
+        lambda payload: _block(
+            "fishaudio.confirmation.request",
+            sid,
+            dict(payload),
+            timeout=300,
+        ),
+    )
 
     def secret_cb(env_var, prompt, metadata=None):
         pl = {"prompt": prompt, "env_var": env_var}
@@ -6702,6 +6723,13 @@ def _(rid, params: dict) -> dict:
                 except Exception as exc:
                     print(f"[tui_gateway] prompt.submit: replace_messages failed: {exc}", file=sys.stderr)
         effective_text = _plan_mode_prompt(session, text)
+        fish_handles = list(session.pop("attached_fishaudio_handles", []) or [])
+        if fish_handles and isinstance(effective_text, str):
+            handle_notes = "\n".join(
+                f"[Authorized Fish audio attachment handle: {handle}]"
+                for handle in fish_handles
+            )
+            effective_text = f"{handle_notes}\n\n{effective_text}"
         session["running"] = True
         session["last_active"] = time.time()
         _start_inflight_turn(session, effective_text)
@@ -6951,7 +6979,10 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
             )
 
             approval_token = set_current_session_key(session["session_key"])
-            session_tokens = _set_session_context(session["session_key"])
+            session_tokens = _set_session_context(
+                session["session_key"],
+                user_text=text if isinstance(text, str) else "",
+            )
             _profile_home_str = session.get("profile_home")
             if _profile_home_str:
                 home_token = set_hermes_home_override(_profile_home_str)
@@ -7884,6 +7915,27 @@ def _(rid, params: dict) -> dict:
             session, raw_path=raw, data_url=data_url, name=name
         )
         ref_path = _attachment_ref_path(session, stored_path)
+        fish_attachment = None
+        if stored_path.suffix.lower() in {
+            ".wav", ".mp3", ".ogg", ".opus", ".flac", ".m4a", ".mp4"
+        }:
+            try:
+                from plugins.tts.fishaudio.tools import register_audio_attachment
+
+                fish_attachment = register_audio_attachment(
+                    stored_path,
+                    session_id=str(session.get("session_key") or params.get("session_id") or ""),
+                    actor="profile:local-owner",
+                    profile=str(session.get("profile_home") or get_hermes_home()),
+                )
+            except Exception:
+                # Generic attachments remain usable even when they do not meet
+                # Fish's stricter cloning input contract.
+                fish_attachment = None
+        if fish_attachment:
+            session.setdefault("attached_fishaudio_handles", []).append(
+                fish_attachment["handle"]
+            )
         return _ok(
             rid,
             {
@@ -7893,6 +7945,12 @@ def _(rid, params: dict) -> dict:
                 "ref_path": ref_path,
                 "ref_text": f"@file:{_format_ref_value(ref_path)}",
                 "uploaded": uploaded,
+                "fishaudio_attachment_handle": (
+                    fish_attachment["handle"] if fish_attachment else None
+                ),
+                "fishaudio_attachment_expires_in": (
+                    int(fish_attachment["expires_in"]) if fish_attachment else None
+                ),
             },
         )
     except Exception as e:
@@ -8159,6 +8217,27 @@ def _(rid, params: dict) -> dict:
 @method("secret.respond")
 def _(rid, params: dict) -> dict:
     return _respond(rid, params, "value")
+
+
+@method("fishaudio.confirmation.respond")
+def _(rid, params: dict) -> dict:
+    request_id = str(params.get("request_id") or "")
+    session, err = _sess(params, rid)
+    if err:
+        return err
+    with _prompt_lock:
+        entry = _pending.get(request_id)
+        if not entry or entry[0] != session["session_key"]:
+            return _err(rid, 4009, "no pending Fish Audio confirmation")
+        confirmation = params.get("confirmation")
+        if not isinstance(confirmation, dict):
+            return _err(rid, 4002, "invalid Fish Audio confirmation")
+        _answers[request_id] = {
+            "approved": params.get("approved") is True,
+            "confirmation": confirmation,
+        }
+        entry[1].set()
+    return _ok(rid, {"status": "ok"})
 
 
 @method("approval.respond")

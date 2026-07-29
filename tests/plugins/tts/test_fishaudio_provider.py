@@ -42,6 +42,16 @@ class TestMetadata:
         ctx = MagicMock()
         fishaudio.register(ctx)
         ctx.register_tts_provider.assert_called_once()
+        assert ctx.register_tool.call_count == 5
+        assert {
+            call.kwargs["name"] for call in ctx.register_tool.call_args_list
+        } == {
+            "fishaudio_voice_create",
+            "fishaudio_voice_list",
+            "fishaudio_voice_get",
+            "fishaudio_voice_set_default",
+            "fishaudio_voice_delete",
+        }
 
 
 class TestVoices:

@@ -8973,6 +8973,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # Declare at outer scope so the audio-file-paths handling block below
         # remains safe when ``event.media_urls`` is empty (no inner block runs).
         audio_file_paths: list[str] = []
+        voice_audio_file_paths: list[str] = []
         video_paths: list[str] = []
 
         if event.media_urls:
@@ -8991,6 +8992,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     and event.message_type not in {MessageType.AUDIO, MessageType.DOCUMENT}
                 ):
                     audio_paths.append(path)
+                    voice_audio_file_paths.append(path)
                 if mtype.startswith("video/") or event.message_type == MessageType.VIDEO:
                     video_paths.append(path)
 
@@ -9072,23 +9074,39 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         except Exception:
                             pass
 
-        if audio_file_paths:
-            from tools.credential_files import to_agent_visible_cache_path as _to_agent_path
-            for _apath in audio_file_paths:
+        if audio_file_paths or voice_audio_file_paths:
+            for _apath in [*audio_file_paths, *voice_audio_file_paths]:
                 _basename = os.path.basename(_apath)
                 _parts = _basename.split("_", 2)
                 _display = _parts[2] if len(_parts) >= 3 else _basename
                 _display = re.sub(r'[^\w.\- ]', '_', _display)
-                _agent_path = _to_agent_path(_apath)
-                _note = (
-                    f"[The user sent an audio file attachment: '{_display}'. "
-                    f"It is saved at: {_agent_path}. "
-                    f"Its content is not inlined here. If the user's request involves "
-                    f"what the audio contains, transcribe or process it yourself — for "
-                    f"example by passing the path to a transcription or media tool — "
-                    f"instead of asking the user to describe it. Only ask what to do "
-                    f"with it if their intent is genuinely unclear.]"
-                )
+                try:
+                    from plugins.tts.fishaudio.tools import register_current_attachment
+
+                    _attachment = register_current_attachment(
+                        _apath, session_id=session_key
+                    )
+                    _note = (
+                        f"[The user authorized an audio attachment: '{_display}'. "
+                        f"Fish voice operations may reference opaque handle "
+                        f"{_attachment['handle']}. Never substitute a filesystem path. "
+                        f"The handle is actor-, profile-, and session-scoped and expires shortly.]"
+                    )
+                except Exception:
+                    # Fish may be disabled or the media may not satisfy its strict
+                    # cloning validator. Preserve the existing generic audio workflow
+                    # without exposing a path as a Fish voice-management input.
+                    from tools.credential_files import (
+                        to_agent_visible_cache_path as _to_agent_path,
+                    )
+
+                    _agent_path = _to_agent_path(_apath)
+                    _note = (
+                        f"[The user sent an audio file attachment: '{_display}'. "
+                        f"It is saved at: {_agent_path}. Its content is not inlined here. "
+                        f"Use ordinary transcription/media processing if requested; this "
+                        f"path is not valid input to Fish voice-management tools.]"
+                    )
                 message_text = f"{_note}\n\n{message_text}"
 
         if video_paths:
@@ -9365,7 +9383,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         context = build_session_context(source, self.config, session_entry)
         
         # Set session context variables for tools (task-local, concurrency-safe)
-        _session_env_tokens = self._set_session_env(context)
+        _session_env_tokens = self._set_session_env(context, user_text=event.text or "")
         
         # Read privacy.redact_pii from config (re-read per message)
         _redact_pii = False
@@ -13246,7 +13264,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         return delivered
 
-    def _set_session_env(self, context: SessionContext) -> list:
+    def _set_session_env(self, context: SessionContext, *, user_text: str = "") -> list:
         """Set session context variables for the current async task.
 
         Uses ``contextvars`` instead of ``os.environ`` so that concurrent
@@ -13270,9 +13288,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             platform=context.source.platform.value,
             chat_id=context.source.chat_id,
             chat_name=context.source.chat_name or "",
+            chat_type=context.source.chat_type or "",
             thread_id=str(context.source.thread_id) if context.source.thread_id else "",
             user_id=str(context.source.user_id) if context.source.user_id else "",
             user_name=str(context.source.user_name) if context.source.user_name else "",
+            user_text=user_text,
             session_key=context.session_key,
             message_id=str(context.source.message_id) if context.source.message_id else "",
             async_delivery=_async_delivery,
