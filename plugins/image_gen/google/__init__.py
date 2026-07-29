@@ -331,7 +331,8 @@ class GoogleImageGenProvider(ImageGenProvider):
             "input": input_parts,
             "response_format": {
                 "type": "image",
-                "mime_type": "image/png",
+                # Interactions API currently accepts JPEG only for image outputs.
+                "mime_type": "image/jpeg",
                 "aspect_ratio": ratio,
             },
         }

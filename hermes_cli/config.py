@@ -6395,6 +6395,45 @@ def save_env_value(key: str, value: str):
 
     os.environ[key] = value
     invalidate_env_cache()
+    if key in {"OPENAI_API_KEY", "OPEN_AI_KEY"}:
+        _pin_image_gen_openai_provider()
+
+
+def _pin_image_gen_openai_provider() -> None:
+    """Point ``image_gen.provider`` at OpenAI after an OpenAI image key is saved.
+
+    Verxio configs often keep a stale ``image_gen.provider: dashscope`` (or
+    fall through to hosted Google). Saving an OpenAI key for image work should
+    route ``image_generate`` to GPT Image instead of leaving the stale pin.
+    """
+    try:
+        cfg = load_config()
+        if not isinstance(cfg, dict):
+            return
+        section = cfg.get("image_gen")
+        if not isinstance(section, dict):
+            section = {}
+        current = str(section.get("provider") or "").strip().lower()
+        if current == "openai":
+            model = str(section.get("model") or "")
+            if model.startswith("gpt-image"):
+                return
+        next_section = dict(section)
+        next_section["provider"] = "openai"
+        model = str(next_section.get("model") or "")
+        if not model.startswith("gpt-image"):
+            next_section["model"] = "gpt-image-2-medium"
+            openai_section = next_section.get("openai")
+            if not isinstance(openai_section, dict):
+                openai_section = {}
+            openai_section = dict(openai_section)
+            openai_section["model"] = "gpt-image-2-medium"
+            next_section["openai"] = openai_section
+        cfg["image_gen"] = next_section
+        save_config(cfg)
+        logger.info("Pinned image_gen.provider=openai after OpenAI API key save")
+    except Exception as exc:
+        logger.debug("Could not pin image_gen.provider to openai: %s", exc)
 
 
 def remove_env_value(key: str) -> bool:

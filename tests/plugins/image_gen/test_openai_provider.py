@@ -74,7 +74,20 @@ class TestMetadata:
 class TestAvailability:
     def test_no_api_key_unavailable(self, monkeypatch):
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("OPEN_AI_KEY", raising=False)
         assert openai_plugin.OpenAIImageGenProvider().is_available() is False
+
+    def test_api_key_from_env_file_available(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("OPEN_AI_KEY", raising=False)
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        (tmp_path / ".env").write_text("OPENAI_API_KEY=from-file\n", encoding="utf-8")
+        assert openai_plugin.OpenAIImageGenProvider().is_available() is True
+
+    def test_open_ai_key_alias_available(self, monkeypatch):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setenv("OPEN_AI_KEY", "alias-key")
+        assert openai_plugin.OpenAIImageGenProvider().is_available() is True
 
     def test_api_key_set_available(self, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "test")

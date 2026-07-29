@@ -94,6 +94,30 @@ def _load_openai_config() -> Dict[str, Any]:
         return {}
 
 
+def _resolve_api_key() -> Optional[str]:
+    """Return the OpenAI API key from process env or Hermes ``.env``.
+
+    The Telegram/messaging gateway is a separate process from the dashboard.
+    Saving a key in Settings updates ``.env`` (and the dashboard process), but
+    the gateway often still lacks ``OPENAI_API_KEY`` in ``os.environ``. Reading
+    via ``get_env_value`` picks up the file-backed key. Also accept the common
+    custom-tool misspelling ``OPEN_AI_KEY``.
+    """
+    for key_name in ("OPENAI_API_KEY", "OPEN_AI_KEY"):
+        raw = os.environ.get(key_name)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+        try:
+            from hermes_cli.config import get_env_value
+
+            value = get_env_value(key_name)
+        except Exception:
+            value = None
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def _resolve_model() -> Tuple[str, Dict[str, Any]]:
     """Decide which tier to use and return ``(model_id, meta)``."""
     env_override = os.environ.get("OPENAI_IMAGE_MODEL")
@@ -170,7 +194,7 @@ class OpenAIImageGenProvider(ImageGenProvider):
         return "OpenAI"
 
     def is_available(self) -> bool:
-        if not os.environ.get("OPENAI_API_KEY"):
+        if not _resolve_api_key():
             return False
         try:
             import openai  # noqa: F401
@@ -232,7 +256,8 @@ class OpenAIImageGenProvider(ImageGenProvider):
                 aspect_ratio=aspect,
             )
 
-        if not os.environ.get("OPENAI_API_KEY"):
+        api_key = _resolve_api_key()
+        if not api_key:
             return error_response(
                 error=(
                     "OPENAI_API_KEY not set. Run `hermes tools` → Image "
@@ -267,7 +292,9 @@ class OpenAIImageGenProvider(ImageGenProvider):
         is_edit = bool(sources)
         modality = "image" if is_edit else "text"
 
-        client = openai.OpenAI()
+        # Pass the resolved key explicitly so gateway workers that never
+        # reloaded os.environ still authenticate against OpenAI.
+        client = openai.OpenAI(api_key=api_key)
 
         if is_edit:
             # images.edit() expects file-like objects. Download/read each

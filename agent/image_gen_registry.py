@@ -9,13 +9,12 @@ Central map of registered providers. Populated by plugins at import-time via
 Active selection
 ----------------
 The active provider is chosen by ``image_gen.provider`` in ``config.yaml``.
-If unset, :func:`get_active_provider` applies fallback logic:
+If unset (or the configured provider is unavailable), :func:`get_active_provider`
+applies fallback logic:
 
-1. If exactly one provider is registered, use it.
-2. Otherwise if a provider named ``fal`` is registered, use it (legacy
-   default — matches pre-plugin behavior).
-3. Otherwise return ``None`` (the tool surfaces a helpful error pointing
-   the user at ``hermes tools``).
+1. If exactly one available provider is registered, use it.
+2. Prefer DashScope, then FAL, then OpenAI when available.
+3. Otherwise the first remaining available provider, or ``None``.
 """
 
 from __future__ import annotations
@@ -148,7 +147,15 @@ def get_active_provider() -> Optional[ImageGenProvider]:
     if fal is not None and _is_available_safe(fal):
         return fal
 
-    # 5. Otherwise any remaining available provider (Google, OpenAI, …).
+    # 5. Prefer OpenAI GPT Image when the user has an API key. Hosted Gemini
+    #    makes Google Nano Banana available too; without this preference the
+    #    alphabetical/registration fallback silently picks Google and ignores
+    #    a user-configured OPENAI_API_KEY (common on Verxio Telegram edits).
+    openai = snapshot.get("openai")
+    if openai is not None and _is_available_safe(openai):
+        return openai
+
+    # 6. Otherwise any remaining available provider (Google, Codex, …).
     if available:
         return available[0]
 
