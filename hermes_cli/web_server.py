@@ -12094,6 +12094,34 @@ async def update_skill_content(body: SkillContentUpdate):
     return result
 
 
+class SkillDelete(BaseModel):
+    name: str
+    profile: Optional[str] = None
+
+
+@app.delete("/api/skills")
+async def delete_skill(body: SkillDelete):
+    """Delete a custom skill from the dashboard editor.
+
+    Uses the same validated delete path as the agent's ``skill_manage`` tool
+    (pinned guards, path safety). A delete from the authenticated dashboard is
+    the user acting directly, so no agent write-approval gate applies.
+    """
+    from tools.skill_manager_tool import _delete_skill
+
+    with _profile_scope(body.profile):
+        result = _delete_skill(body.name)
+    if not result.get("success"):
+        err = result.get("error", "Failed to delete skill.")
+        lowered = str(err).lower()
+        status = 404 if "not found" in lowered else 400
+        if "pinned" in lowered or "protected" in lowered:
+            status = 403
+        raise HTTPException(status_code=status, detail=err)
+    _clear_skills_prompt_cache()
+    return result
+
+
 @app.post("/api/skills/files")
 async def write_skill_files(body: SkillFilesWrite):
     """Write supporting skill files after a client-side package extract.
