@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from agent.tts_provider import DEFAULT_OUTPUT_FORMAT, TTSProvider
 from plugins._fishaudio_common import (
@@ -13,6 +13,10 @@ from plugins._fishaudio_common import (
     error_message,
     request_bytes,
     request_json,
+)
+from plugins.tts.fishaudio.stream import (
+    FishAudioTTSStreamSession,
+    build_start_request,
 )
 
 logger = logging.getLogger(__name__)
@@ -140,6 +144,49 @@ class FishAudioTTSProvider(TTSProvider):
             or config.get("voice_id")
         )
         return str(value).strip() if value else None
+
+    def supports_streaming(self) -> bool:
+        config = _load_provider_config()
+        # Default on; operators can disable live WSS without changing provider.
+        return bool(config.get("streaming", True))
+
+    def open_stream(
+        self,
+        *,
+        voice: Optional[str] = None,
+        model: Optional[str] = None,
+        format: str = DEFAULT_OUTPUT_FORMAT,
+        on_audio: Optional[Callable[[bytes], None]] = None,
+        on_end: Optional[Callable[[str, Optional[str]], None]] = None,
+        **extra: Any,
+    ) -> FishAudioTTSStreamSession:
+        if not api_key():
+            raise RuntimeError("FISH_AUDIO_API_KEY is not set")
+        config = _load_provider_config()
+        resolved_model = str(
+            model or config.get("model") or DEFAULT_MODEL
+        ).strip()
+        request = build_start_request(
+            format=format,
+            voice=voice,
+            config=config,
+            **extra,
+        )
+        session = FishAudioTTSStreamSession(
+            request=request,
+            model=resolved_model,
+            on_audio=on_audio,
+            on_end=on_end,
+            connect_timeout_s=float(
+                config.get("stream_connect_timeout", 15.0) or 15.0
+            ),
+            idle_timeout_s=float(config.get("stream_idle_timeout", 60.0) or 60.0),
+            total_timeout_s=float(
+                config.get("stream_total_timeout", 300.0) or 300.0
+            ),
+        )
+        session.start()
+        return session
 
     def get_setup_schema(self) -> Dict[str, Any]:
         return {

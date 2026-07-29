@@ -47,13 +47,40 @@ from __future__ import annotations
 
 import abc
 import logging
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional, Protocol
 
 logger = logging.getLogger(__name__)
 
 
 DEFAULT_OUTPUT_FORMAT = "mp3"
 VALID_OUTPUT_FORMATS = frozenset({"mp3", "wav", "ogg", "opus", "flac"})
+
+
+# ---------------------------------------------------------------------------
+# Streaming session protocol
+# ---------------------------------------------------------------------------
+
+
+class TTSStreamSession(Protocol):
+    """Bidirectional streaming TTS session.
+
+    Providers that support incremental synthesis open one of these via
+    :meth:`TTSProvider.open_stream`. Callers feed text, optionally flush
+    sentence boundaries, and receive audio through the callbacks supplied
+    at open time.
+    """
+
+    def send_text(self, text: str) -> None:
+        """Enqueue a text chunk for synthesis."""
+
+    def flush(self) -> None:
+        """Force synthesis of any buffered text."""
+
+    def stop(self, *, cancel: bool = False) -> None:
+        """End the session. ``cancel=True`` aborts without draining."""
+
+    def close(self) -> None:
+        """Release resources. Idempotent."""
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +266,38 @@ class TTSProvider(abc.ABC):
             f"TTS provider {self.name!r} does not implement streaming "
             "synthesis. Use synthesize() instead, or implement stream() "
             "if your backend supports it."
+        )
+
+    def supports_streaming(self) -> bool:
+        """Return True when :meth:`open_stream` is implemented.
+
+        Default: False. Interactive voice UIs call this before opening a
+        live session and fall back to buffered :meth:`synthesize`.
+        """
+        return False
+
+    def open_stream(
+        self,
+        *,
+        voice: Optional[str] = None,
+        model: Optional[str] = None,
+        format: str = DEFAULT_OUTPUT_FORMAT,
+        on_audio: Optional[Callable[[bytes], None]] = None,
+        on_end: Optional[Callable[[str, Optional[str]], None]] = None,
+        **extra: Any,
+    ) -> TTSStreamSession:
+        """Open a bidirectional streaming TTS session.
+
+        ``on_audio`` receives raw audio chunks in the requested format.
+        ``on_end(reason, error)`` is called once with ``reason`` in
+        ``{"complete", "cancelled", "error"}``.
+
+        Providers that do not support streaming raise
+        :class:`NotImplementedError` (the default).
+        """
+        raise NotImplementedError(
+            f"TTS provider {self.name!r} does not implement open_stream(). "
+            "Use synthesize() or fall back to buffered HTTP."
         )
 
     @property

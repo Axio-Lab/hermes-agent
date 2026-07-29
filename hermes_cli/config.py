@@ -1833,6 +1833,13 @@ DEFAULT_CONFIG = {
             "sample_rate": 44100,
             "mp3_bitrate": 128,
             "timeout": 120,
+            # Interactive voice mode uses live WSS when true; HTTP synthesize
+            # remains the buffered fallback for gateways and speak endpoints.
+            "streaming": True,
+            "stream_connect_timeout": 15,
+            "stream_idle_timeout": 60,
+            "stream_total_timeout": 300,
+            "max_concurrent_streams": 4,
         },
         "gemini": {
             "model": "gemini-2.5-flash-preview-tts",

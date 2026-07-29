@@ -3070,6 +3070,51 @@ async def speak_text(payload: TTSSpeakRequest):
     }
 
 
+@app.get("/api/audio/speak/stream/capabilities")
+async def speak_stream_capabilities():
+    """Report whether interactive live TTS streaming is available.
+
+    Bidirectional audio still travels over the TUI gateway JSON-RPC
+    (``tts.stream.*``); this endpoint only advertises capability so the
+    UI can decide whether to attempt a live open.
+    """
+    provider_name = None
+    streaming = False
+    try:
+        from hermes_cli.config import load_config
+
+        cfg = load_config()
+        provider_name = str(((cfg.get("tts") or {}).get("provider") or "")).strip() or None
+    except Exception:
+        provider_name = None
+
+    if provider_name == "fishaudio":
+        try:
+            from plugins.tts.fishaudio.provider import FishAudioTTSProvider
+
+            provider = FishAudioTTSProvider()
+            streaming = bool(
+                provider.supports_streaming() and provider.is_available()
+            )
+        except Exception:
+            streaming = False
+
+    return {
+        "ok": True,
+        "streaming": streaming,
+        "provider": provider_name,
+        "transport": "gateway",
+        "methods": [
+            "tts.stream.open",
+            "tts.stream.text",
+            "tts.stream.flush",
+            "tts.stream.close",
+        ],
+        "events": ["tts.stream.chunk", "tts.stream.end"],
+        "mime_types": ["audio/mpeg"],
+    }
+
+
 @app.get("/api/actions/{name}/status")
 async def get_action_status(name: str, lines: int = 200):
     """Tail an action log and report whether the process is still running."""

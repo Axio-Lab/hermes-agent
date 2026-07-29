@@ -102,6 +102,10 @@ dependencies = [
   # Browser CDP supervisor + browser_dialog import this directly. Keep core
   # so browser tool discovery doesn't fail on lean installs.
   "websockets==15.0.1",
+  # Fish Audio live TTS WebSocket frames use MessagePack (also used transitively
+  # by fal-client). Pin explicitly so the Fish stream adapter does not rely on
+  # an indirect dependency remaining present.
+  "msgpack==1.1.2",
   # .gitignore-aware file matching for desktop build stamp.
   "pathspec==1.1.1",
   "fastapi>=0.104.0,<1",

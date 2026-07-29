@@ -133,6 +133,15 @@ _stdout_lock = threading.Lock()
 _cfg_lock = threading.Lock()
 _sessions_lock = threading.RLock()  # reentrant: _close_session_by_id may run under callers that already hold it
 _prompt_lock = threading.Lock()
+_tts_streams: dict[str, dict] = {}
+_tts_streams_lock = threading.Lock()
+_TTS_STREAM_MAX_DEFAULT = 4
+_TTS_STREAM_MIME = {
+    "mp3": "audio/mpeg",
+    "wav": "audio/wav",
+    "opus": "audio/ogg",
+    "pcm": "audio/pcm",
+}
 _cfg_cache: dict | None = None
 _cfg_mtime: float | None = None
 _cfg_path = None
@@ -541,6 +550,14 @@ def _close_session_by_id(sid: str, *, end_reason: str = "tui_close") -> bool:
         session = _sessions.pop(sid, None)
     if session is None:
         return False
+    # Cancel any live TTS streams bound to this session before agent teardown.
+    doomed: list[str] = []
+    with _tts_streams_lock:
+        for stream_id, entry in list(_tts_streams.items()):
+            if entry.get("sid") == sid:
+                doomed.append(stream_id)
+    for stream_id in doomed:
+        _tts_stream_cleanup(stream_id)
     _teardown_session(session, end_reason=end_reason)
     return True
 
@@ -8237,6 +8254,257 @@ def _(rid, params: dict) -> dict:
             "confirmation": confirmation,
         }
         entry[1].set()
+    return _ok(rid, {"status": "ok"})
+
+
+def _tts_stream_limits() -> int:
+    try:
+        from hermes_cli.config import load_config
+
+        cfg = load_config()
+        section = ((cfg.get("tts") or {}).get("fishaudio") or {})
+        raw = section.get("max_concurrent_streams", _TTS_STREAM_MAX_DEFAULT)
+        return max(1, min(16, int(raw)))
+    except Exception:
+        return _TTS_STREAM_MAX_DEFAULT
+
+
+def _resolve_streaming_tts_provider():
+    """Return a streaming-capable TTS provider for the active config, or None."""
+    try:
+        from hermes_cli.config import load_config
+
+        cfg = load_config()
+        name = str(((cfg.get("tts") or {}).get("provider") or "")).strip().lower()
+    except Exception:
+        name = ""
+
+    if name == "fishaudio":
+        try:
+            from plugins.tts.fishaudio.provider import FishAudioTTSProvider
+
+            provider = FishAudioTTSProvider()
+            if provider.supports_streaming() and provider.is_available():
+                return provider
+        except Exception:
+            logger.debug("Fish Audio streaming provider unavailable", exc_info=True)
+            return None
+
+    if not name:
+        return None
+    try:
+        from agent.tts_registry import get_provider
+
+        provider = get_provider(name)
+        if (
+            provider is not None
+            and getattr(provider, "supports_streaming", lambda: False)()
+            and provider.is_available()
+        ):
+            return provider
+    except Exception:
+        logger.debug("Streaming TTS provider lookup failed", exc_info=True)
+    return None
+
+
+def _tts_stream_cleanup(stream_id: str) -> None:
+    with _tts_streams_lock:
+        entry = _tts_streams.pop(stream_id, None)
+    if not entry:
+        return
+    session = entry.get("session")
+    if session is not None:
+        try:
+            session.close()
+        except Exception:
+            pass
+
+
+def _tts_stream_emit_end(
+    sid: str, stream_id: str, reason: str, error: str | None = None
+) -> None:
+    payload: dict = {"stream_id": stream_id, "reason": reason}
+    if error:
+        payload["error"] = str(error)[:400]
+    _emit("tts.stream.end", sid, payload)
+    _tts_stream_cleanup(stream_id)
+
+
+@method("tts.stream.open")
+def _(rid, params: dict) -> dict:
+    session, err = _sess_nowait(params, rid)
+    if err:
+        return err
+    sid = params.get("session_id") or ""
+    fmt = str(params.get("format") or "mp3").strip().lower() or "mp3"
+    if fmt == "ogg":
+        fmt = "opus"
+    if fmt not in _TTS_STREAM_MIME:
+        fmt = "mp3"
+
+    provider = _resolve_streaming_tts_provider()
+    if provider is None:
+        return _ok(
+            rid,
+            {
+                "streaming": False,
+                "provider": None,
+                "mime_type": _TTS_STREAM_MIME[fmt],
+                "stream_id": None,
+            },
+        )
+
+    with _tts_streams_lock:
+        active_for_session = sum(
+            1 for item in _tts_streams.values() if item.get("sid") == sid
+        )
+        if len(_tts_streams) >= _tts_stream_limits() or active_for_session >= 2:
+            return _ok(
+                rid,
+                {
+                    "streaming": False,
+                    "provider": provider.name,
+                    "mime_type": _TTS_STREAM_MIME[fmt],
+                    "stream_id": None,
+                    "reason": "busy",
+                },
+            )
+
+    stream_id = uuid.uuid4().hex
+    seq_holder = {"seq": 0}
+
+    def on_audio(chunk: bytes) -> None:
+        with _tts_streams_lock:
+            entry = _tts_streams.get(stream_id)
+            if not entry or entry.get("cancelled"):
+                return
+            seq_holder["seq"] += 1
+            seq = seq_holder["seq"]
+        import base64
+
+        _emit(
+            "tts.stream.chunk",
+            sid,
+            {
+                "stream_id": stream_id,
+                "seq": seq,
+                "data_b64": base64.b64encode(chunk).decode("ascii"),
+            },
+        )
+
+    def on_end(reason: str, error: str | None = None) -> None:
+        with _tts_streams_lock:
+            entry = _tts_streams.get(stream_id)
+            if not entry:
+                return
+            if entry.get("ended"):
+                return
+            entry["ended"] = True
+        _tts_stream_emit_end(sid, stream_id, reason, error)
+
+    try:
+        stream_session = provider.open_stream(
+            format=fmt,
+            on_audio=on_audio,
+            on_end=on_end,
+        )
+    except Exception as exc:
+        logger.debug("tts.stream.open failed: %s", exc, exc_info=True)
+        return _ok(
+            rid,
+            {
+                "streaming": False,
+                "provider": getattr(provider, "name", None),
+                "mime_type": _TTS_STREAM_MIME[fmt],
+                "stream_id": None,
+                "reason": "unavailable",
+                "error": str(exc)[:200],
+            },
+        )
+
+    with _tts_streams_lock:
+        _tts_streams[stream_id] = {
+            "sid": sid,
+            "session": stream_session,
+            "provider": provider.name,
+            "mime_type": _TTS_STREAM_MIME[fmt],
+            "cancelled": False,
+            "ended": False,
+        }
+    return _ok(
+        rid,
+        {
+            "streaming": True,
+            "stream_id": stream_id,
+            "provider": provider.name,
+            "mime_type": _TTS_STREAM_MIME[fmt],
+        },
+    )
+
+
+@method("tts.stream.text")
+def _(rid, params: dict) -> dict:
+    stream_id = str(params.get("stream_id") or "").strip()
+    session, err = _sess_nowait(params, rid)
+    if err:
+        return err
+    sid = params.get("session_id") or ""
+    text = params.get("text")
+    if not isinstance(text, str):
+        return _err(rid, 4002, "text must be a string")
+    with _tts_streams_lock:
+        entry = _tts_streams.get(stream_id)
+        if not entry or entry.get("sid") != sid:
+            return _err(rid, 4009, "tts stream not found")
+        stream_session = entry.get("session")
+    try:
+        stream_session.send_text(text)
+    except Exception as exc:
+        return _err(rid, 4002, str(exc)[:200])
+    return _ok(rid, {"status": "ok"})
+
+
+@method("tts.stream.flush")
+def _(rid, params: dict) -> dict:
+    stream_id = str(params.get("stream_id") or "").strip()
+    session, err = _sess_nowait(params, rid)
+    if err:
+        return err
+    sid = params.get("session_id") or ""
+    with _tts_streams_lock:
+        entry = _tts_streams.get(stream_id)
+        if not entry or entry.get("sid") != sid:
+            return _err(rid, 4009, "tts stream not found")
+        stream_session = entry.get("session")
+    try:
+        stream_session.flush()
+    except Exception as exc:
+        return _err(rid, 4002, str(exc)[:200])
+    return _ok(rid, {"status": "ok"})
+
+
+@method("tts.stream.close")
+def _(rid, params: dict) -> dict:
+    stream_id = str(params.get("stream_id") or "").strip()
+    session, err = _sess_nowait(params, rid)
+    if err:
+        return err
+    sid = params.get("session_id") or ""
+    cancel = params.get("cancel") is True
+    with _tts_streams_lock:
+        entry = _tts_streams.get(stream_id)
+        if not entry or entry.get("sid") != sid:
+            return _ok(rid, {"status": "ok"})
+        entry["cancelled"] = cancel
+        stream_session = entry.get("session")
+    try:
+        stream_session.stop(cancel=cancel)
+        if cancel:
+            stream_session.close()
+    except Exception:
+        pass
+    if cancel:
+        _tts_stream_emit_end(sid, stream_id, "cancelled", None)
     return _ok(rid, {"status": "ok"})
 
 
