@@ -23,6 +23,7 @@ ALLOWED_API_HOSTS = frozenset({"api.fish.audio"})
 ENV_API_KEY = "FISH_AUDIO_API_KEY"
 ENV_API_KEY_ALIASES = ("FISH_AUDIO_API_KEY", "FISH_API_KEY")
 DEFAULT_TIMEOUT_SECONDS = 120.0
+DEFAULT_MAX_JSON_BYTES = 4 * 1024 * 1024
 MAX_ERROR_BODY_CHARS = 400
 _SECRET_RE = re.compile(
     r"(?i)(authorization|api[_-]?key|bearer|token)\s*[:=]\s*([^\s,\"']+)"
@@ -105,6 +106,7 @@ def request_json(
     query: Optional[Dict[str, Any]] = None,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     key: Optional[str] = None,
+    max_bytes: int = DEFAULT_MAX_JSON_BYTES,
 ) -> Tuple[int, Dict[str, Any]]:
     """HTTP JSON request against the Fish Audio API.
 
@@ -147,7 +149,19 @@ def request_json(
     request = urllib.request.Request(url, data=data, headers=req_headers, method=method)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8") or "{}"
+            chunks: List[bytes] = []
+            total = 0
+            while True:
+                chunk = resp.read(64 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    raise RuntimeError(
+                        f"Fish Audio JSON response exceeded {max_bytes} bytes"
+                    )
+                chunks.append(chunk)
+            raw = b"".join(chunks).decode("utf-8") or "{}"
             try:
                 payload = json.loads(raw)
             except json.JSONDecodeError:
@@ -156,7 +170,7 @@ def request_json(
                 payload = {"data": payload}
             return resp.status, payload
     except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
+        raw = exc.read(64 * 1024).decode("utf-8", errors="replace")
         try:
             payload = json.loads(raw) if raw else {}
         except json.JSONDecodeError:
@@ -257,14 +271,16 @@ def multipart_post(
         else:
             rendered = str(value)
         body.extend(f"--{boundary}\r\n".encode())
-        body.extend(
-            f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode()
-        )
+        body.extend(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode())
         body.extend(rendered.encode("utf-8"))
         body.extend(b"\r\n")
 
     for field_name, filename, content, content_type in files:
-        guessed = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        guessed = (
+            content_type
+            or mimetypes.guess_type(filename)[0]
+            or "application/octet-stream"
+        )
         body.extend(f"--{boundary}\r\n".encode())
         body.extend(
             (
@@ -292,10 +308,17 @@ def multipart_post(
         }
         req_headers.update(safe)
 
-    request = urllib.request.Request(url, data=bytes(body), headers=req_headers, method="POST")
+    request = urllib.request.Request(
+        url, data=bytes(body), headers=req_headers, method="POST"
+    )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8") or "{}"
+            raw_bytes = resp.read(DEFAULT_MAX_JSON_BYTES + 1)
+            if len(raw_bytes) > DEFAULT_MAX_JSON_BYTES:
+                raise RuntimeError(
+                    f"Fish Audio JSON response exceeded {DEFAULT_MAX_JSON_BYTES} bytes"
+                )
+            raw = raw_bytes.decode("utf-8") or "{}"
             try:
                 payload = json.loads(raw)
             except json.JSONDecodeError:
@@ -304,7 +327,7 @@ def multipart_post(
                 payload = {"data": payload}
             return resp.status, payload
     except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
+        raw = exc.read(64 * 1024).decode("utf-8", errors="replace")
         try:
             payload = json.loads(raw) if raw else {}
         except json.JSONDecodeError:

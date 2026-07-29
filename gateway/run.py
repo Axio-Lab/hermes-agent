@@ -958,6 +958,7 @@ def _last_transcript_timestamp(history: Optional[List[Dict[str, Any]]]) -> Any:
 _AUTO_APPEND_MEDIA_TOOL_NAMES = {
     "text_to_speech",
     "text_to_speech_tool",
+    "fishaudio_voice_design_preview",
     "image_generate",
     "video_generate",
     # File tools: only paths under an ``artifacts/`` directory with a

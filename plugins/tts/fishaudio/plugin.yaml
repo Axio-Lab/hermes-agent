@@ -5,6 +5,9 @@ author: Axio Lab
 license: MIT
 kind: backend
 provides_tools:
+  - fishaudio_voice_design_preview
+  - fishaudio_voice_design_persist
+  - fishaudio_voice_design_discard
   - fishaudio_voice_create
   - fishaudio_voice_list
   - fishaudio_voice_get

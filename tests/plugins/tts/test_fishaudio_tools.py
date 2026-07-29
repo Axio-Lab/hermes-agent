@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import os
 import threading
+import wave
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,7 +18,19 @@ from plugins.tts.fishaudio import tools
 
 
 def _wav_bytes(size: int = 96) -> bytes:
-    return b"RIFF" + (size - 8).to_bytes(4, "little") + b"WAVEfmt " + b"\0" * (size - 16)
+    return (
+        b"RIFF" + (size - 8).to_bytes(4, "little") + b"WAVEfmt " + b"\0" * (size - 16)
+    )
+
+
+def _preview_wav_bytes() -> bytes:
+    output = io.BytesIO()
+    with wave.open(output, "wb") as writer:
+        writer.setnchannels(1)
+        writer.setsampwidth(2)
+        writer.setframerate(44_100)
+        writer.writeframes(b"\0" * (44_100 * 3))
+    return output.getvalue()
 
 
 @pytest.fixture(autouse=True)
@@ -34,10 +48,14 @@ def _fish_env(tmp_path, monkeypatch):
     ):
         monkeypatch.delenv(name, raising=False)
     tools._attachments.clear()
+    tools._previews.clear()
+    tools._design_requests.clear()
     tools._confirmations.clear()
     tools._confirmation_callbacks.clear()
     yield tmp_path
     tools._attachments.clear()
+    tools._previews.clear()
+    tools._design_requests.clear()
     tools._confirmations.clear()
     tools._confirmation_callbacks.clear()
 
@@ -48,7 +66,9 @@ def _audio(tmp_path: Path, name: str = "sample.wav") -> Path:
     return path
 
 
-def _handle(tmp_path: Path, *, session: str = "session-a", actor: str = "profile:local-owner") -> str:
+def _handle(
+    tmp_path: Path, *, session: str = "session-a", actor: str = "profile:local-owner"
+) -> str:
     return tools.register_audio_attachment(
         _audio(tmp_path),
         session_id=session,
@@ -57,7 +77,38 @@ def _handle(tmp_path: Path, *, session: str = "session-a", actor: str = "profile
     )["handle"]
 
 
-def _confirm_create(tmp_path: Path, monkeypatch, *, visibility: str = "private") -> dict:
+def _voice_design_payload(*, candidate_id: str = "candidate-1", index: int = 0) -> dict:
+    return {
+        "candidates": [
+            {
+                "id": candidate_id,
+                "index": index,
+                "audio_base64": base64.b64encode(_preview_wav_bytes()).decode(),
+                "sample_rate": 44_100,
+                "duration_ms": 1_500,
+                "text": "Hello from the preview.",
+            }
+        ]
+    }
+
+
+def _preview_handle() -> str:
+    with patch.object(
+        tools, "request_json", return_value=(200, _voice_design_payload())
+    ):
+        result = json.loads(
+            tools.fishaudio_voice_design_preview({
+                "description": "Warm, calm narrator",
+                "preview_script": "Hello from the preview.",
+            })
+        )
+    assert result["success"] is True
+    return result["previews"][0]["preview_handle"]
+
+
+def _confirm_create(
+    tmp_path: Path, monkeypatch, *, visibility: str = "private"
+) -> dict:
     handle = _handle(tmp_path)
     args = {
         "attachment_handle": handle,
@@ -77,6 +128,333 @@ def _confirm_create(tmp_path: Path, monkeypatch, *, visibility: str = "private")
         )
     result["_request"] = request
     return result
+
+
+def test_voice_design_preview_uses_fixed_api_contract_and_opaque_handles():
+    with patch.object(
+        tools, "request_json", return_value=(200, _voice_design_payload())
+    ) as request:
+        result = json.loads(
+            tools.fishaudio_voice_design_preview({
+                "description": "Warm, calm narrator",
+                "preview_script": "Hello from the preview.",
+                "candidate_count": 1,
+                "base_url": "http://127.0.0.1:8080",
+            })
+        )
+
+    assert result["success"] is True
+    preview = result["previews"][0]
+    assert preview["preview_handle"].startswith("fishpreview_")
+    assert set(preview) == {
+        "preview_handle",
+        "index",
+        "sample_rate",
+        "duration_ms",
+        "size_bytes",
+        "media",
+    }
+    assert preview["media"].startswith("MEDIA:")
+    assert Path(preview["media"].removeprefix("MEDIA:")).is_file()
+    assert "/artifacts/fishaudio-design-previews/" in preview["media"]
+    assert "audio_base64" not in json.dumps(result)
+    request.assert_called_once_with(
+        "POST",
+        "/v1/voice-design",
+        body={
+            "instruction": "Warm, calm narrator",
+            "reference_text": "Hello from the preview.",
+            "n": 1,
+        },
+        headers={"model": "voice-design-1"},
+        max_bytes=40 * 1024 * 1024,
+    )
+
+
+def test_voice_design_preview_reports_api_errors_without_storing_audio():
+    with patch.object(
+        tools,
+        "request_json",
+        return_value=(422, {"message": "invalid voice instruction"}),
+    ):
+        result = json.loads(
+            tools.fishaudio_voice_design_preview({
+                "description": "Warm narrator",
+                "preview_script": "Hello.",
+            })
+        )
+
+    assert result["success"] is False
+    assert "invalid voice instruction" in result["error"]
+    assert tools._previews == {}
+
+
+def test_voice_design_preview_forwards_deterministic_seed_and_language():
+    with patch.object(
+        tools, "request_json", return_value=(200, _voice_design_payload())
+    ) as request:
+        result = json.loads(
+            tools.fishaudio_voice_design_preview({
+                "description": "Warm narrator",
+                "preview_script": "Hello.",
+                "seed": 42,
+                "language": "en-US",
+            })
+        )
+
+    assert result["success"] is True
+    assert request.call_args.kwargs["body"] == {
+        "instruction": "Warm narrator",
+        "reference_text": "Hello.",
+        "n": 1,
+        "seed": 42,
+        "language": "en-US",
+    }
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ({"session": "session-b"}, "another actor or session"),
+        ({"actor": "profile:someone-else"}, "another actor or session"),
+        ({"profile": "/another/profile"}, "another profile"),
+    ],
+)
+def test_voice_design_preview_is_bound_to_session_actor_and_profile(mutation, message):
+    handle = _preview_handle()
+    tools._previews[handle].update(mutation)
+
+    result = json.loads(
+        tools.fishaudio_voice_design_persist({
+            "preview_handle": handle,
+            "alias": "Designed voice",
+        })
+    )
+
+    assert result["success"] is False
+    assert message in result["error"]
+
+
+def test_voice_design_preview_expiry_blocks_persistence():
+    handle = _preview_handle()
+    artifact = Path(tools._previews[handle]["artifact_path"])
+    tools._previews[handle]["expires"] = 0
+
+    result = json.loads(
+        tools.fishaudio_voice_design_persist({
+            "preview_handle": handle,
+            "alias": "Designed voice",
+        })
+    )
+
+    assert result["success"] is False
+    assert "invalid or stale" in result["error"]
+    assert not artifact.exists()
+
+
+def test_voice_design_discard_removes_scoped_artifact():
+    handle = _preview_handle()
+    artifact = Path(tools._previews[handle]["artifact_path"])
+
+    result = json.loads(
+        tools.fishaudio_voice_design_discard({"preview_handle": handle})
+    )
+
+    assert result == {"success": True, "discarded": 1}
+    assert handle not in tools._previews
+    assert not artifact.exists()
+
+
+def test_voice_design_request_quota_is_session_scoped(monkeypatch):
+    monkeypatch.setattr(tools, "MAX_VOICE_DESIGN_REQUESTS_PER_WINDOW", 2)
+    with patch.object(
+        tools, "request_json", return_value=(200, _voice_design_payload())
+    ) as request:
+        for _ in range(2):
+            assert (
+                json.loads(
+                    tools.fishaudio_voice_design_preview({
+                        "description": "Voice",
+                        "preview_script": "Hello.",
+                    })
+                )["success"]
+                is True
+            )
+        denied = json.loads(
+            tools.fishaudio_voice_design_preview({
+                "description": "Voice",
+                "preview_script": "Hello.",
+            })
+        )
+
+    assert denied["success"] is False
+    assert "limited to 2 requests" in denied["error"]
+    assert request.call_count == 2
+
+
+def test_trusted_preview_reader_returns_audio_without_exposing_storage_path(tmp_path):
+    handle = _preview_handle()
+
+    audio, metadata = tools.read_voice_design_preview(
+        handle,
+        session_id="session-a",
+        actor="profile:local-owner",
+        profile=str(tmp_path),
+    )
+
+    assert audio.startswith(b"RIFF")
+    assert metadata["preview_handle"] == handle
+    assert metadata["content_type"] == "audio/wav"
+    assert "path" not in metadata
+
+
+def test_voice_design_preview_rejects_malformed_or_oversized_audio(monkeypatch):
+    malformed = _voice_design_payload()
+    malformed["candidates"][0]["audio_base64"] = base64.b64encode(b"not-wav").decode()
+    with patch.object(tools, "request_json", return_value=(200, malformed)):
+        bad = json.loads(
+            tools.fishaudio_voice_design_preview({
+                "description": "Voice",
+                "preview_script": "Hello.",
+            })
+        )
+    assert bad["success"] is False
+    assert "malformed" in bad["error"]
+
+    monkeypatch.setattr(tools, "MAX_PREVIEW_AUDIO_BYTES", 32)
+    with patch.object(
+        tools, "request_json", return_value=(200, _voice_design_payload())
+    ):
+        oversized = json.loads(
+            tools.fishaudio_voice_design_preview({
+                "description": "Voice",
+                "preview_script": "Hello.",
+            })
+        )
+    assert oversized["success"] is False
+    assert "invalid preview audio" in oversized["error"]
+
+
+def test_voice_design_persist_forces_private_and_updates_ledger(monkeypatch):
+    handle = _preview_handle()
+    artifact = Path(tools._previews[handle]["artifact_path"])
+    args = {"preview_handle": handle, "alias": "Designed voice"}
+    first = json.loads(tools.fishaudio_voice_design_persist(args))
+    phrase = first["confirmation_phrase"]
+    monkeypatch.setenv("HERMES_SESSION_USER_TEXT", phrase)
+    with patch.object(
+        tools,
+        "multipart_post",
+        return_value=(201, {"_id": "designed-voice-1", "visibility": "private"}),
+    ) as request:
+        result = json.loads(
+            tools.fishaudio_voice_design_persist({**args, "confirmation": phrase})
+        )
+
+    assert result == {
+        "success": True,
+        "voice_id": "designed-voice-1",
+        "alias": "Designed voice",
+        "visibility": "private",
+        "refresh_voices": True,
+        "can_set_default": True,
+    }
+    fields = request.call_args.kwargs["fields"]
+    assert fields["visibility"] == "private"
+    assert request.call_args.kwargs["files"][0][0] == "voices"
+    assert request.call_args.kwargs["files"][0][3] == "audio/wav"
+    ledger = tools._load_ledger()
+    assert ledger["voices"][0]["source_digest"]
+    assert handle not in tools._previews
+    assert not artifact.exists()
+
+
+def test_voice_design_persist_rejects_non_private_provider_response(monkeypatch):
+    handle = _preview_handle()
+    args = {"preview_handle": handle, "alias": "Designed voice"}
+    phrase = json.loads(tools.fishaudio_voice_design_persist(args))[
+        "confirmation_phrase"
+    ]
+    monkeypatch.setenv("HERMES_SESSION_USER_TEXT", phrase)
+    with (
+        patch.object(
+            tools,
+            "multipart_post",
+            return_value=(201, {"_id": "unsafe-voice", "visibility": "public"}),
+        ),
+        patch.object(tools, "request_json", return_value=(204, {})) as cleanup,
+    ):
+        result = json.loads(
+            tools.fishaudio_voice_design_persist({**args, "confirmation": phrase})
+        )
+
+    assert result["success"] is False
+    assert "private visibility" in result["error"]
+    assert tools._load_ledger()["voices"] == []
+    cleanup.assert_called_once_with("DELETE", "model/unsafe-voice")
+
+
+def test_voice_design_persist_confirmation_is_bound_to_selected_preview(monkeypatch):
+    first_handle = _preview_handle()
+    with patch.object(
+        tools,
+        "request_json",
+        return_value=(200, _voice_design_payload(candidate_id="candidate-2")),
+    ):
+        second_handle = json.loads(
+            tools.fishaudio_voice_design_preview({
+                "description": "Another voice",
+                "preview_script": "Hello again.",
+            })
+        )["previews"][0]["preview_handle"]
+
+    phrase = json.loads(
+        tools.fishaudio_voice_design_persist({
+            "preview_handle": first_handle,
+            "alias": "Designed voice",
+        })
+    )["confirmation_phrase"]
+    monkeypatch.setenv("HERMES_SESSION_USER_TEXT", phrase)
+    with patch.object(tools, "multipart_post") as request:
+        result = json.loads(
+            tools.fishaudio_voice_design_persist({
+                "preview_handle": second_handle,
+                "alias": "Designed voice",
+                "confirmation": phrase,
+            })
+        )
+
+    assert result["success"] is False
+    assert "not bound" in result["error"]
+    request.assert_not_called()
+
+
+def test_voice_design_persist_uses_server_confirmation_callback():
+    handle = _preview_handle()
+    seen = {}
+
+    def approve(payload):
+        seen.update(payload)
+        return {"approved": True, "confirmation": payload["confirmation"]}
+
+    tools.register_confirmation_callback("session-a", approve)
+    with patch.object(
+        tools,
+        "multipart_post",
+        return_value=(201, {"_id": "designed-popup", "visibility": "private"}),
+    ):
+        result = json.loads(
+            tools.fishaudio_voice_design_persist({
+                "preview_handle": handle,
+                "alias": "Popup design",
+            })
+        )
+
+    assert result["success"] is True
+    assert seen["action"] == "persist"
+    assert (
+        seen["attachment_digest"] == tools._load_ledger()["voices"][0]["source_digest"]
+    )
 
 
 def test_create_forces_private_and_persists_minimal_ledger(tmp_path, monkeypatch):
@@ -128,7 +506,9 @@ def test_create_api_error_is_redacted(tmp_path, monkeypatch):
         "multipart_post",
         return_value=(401, {"message": "Authorization: Bearer not-a-real-key"}),
     ):
-        result = json.loads(tools.fishaudio_voice_create({**args, "confirmation": phrase}))
+        result = json.loads(
+            tools.fishaudio_voice_create({**args, "confirmation": phrase})
+        )
 
     assert result["success"] is False
     assert "not-a-real-key" not in result["error"]
@@ -143,7 +523,9 @@ def test_attachment_rejects_raw_path_stale_cross_session_and_malformed(tmp_path)
     with pytest.raises(PermissionError, match="another actor or session"):
         tools._resolve_attachment(handle, {**ctx, "session": "other"})
     with pytest.raises(PermissionError, match="another profile"):
-        with patch.object(tools, "get_hermes_home", return_value=tmp_path / "other-profile"):
+        with patch.object(
+            tools, "get_hermes_home", return_value=tmp_path / "other-profile"
+        ):
             tools._resolve_attachment(handle, ctx)
 
     tools._attachments[handle]["expires"] = 0
@@ -244,9 +626,10 @@ def test_session_popup_confirmation_is_server_bound(tmp_path):
         return_value=(201, {"_id": "voice-popup", "visibility": "private"}),
     ):
         result = json.loads(
-            tools.fishaudio_voice_create(
-                {"attachment_handle": handle, "alias": "Popup voice"}
-            )
+            tools.fishaudio_voice_create({
+                "attachment_handle": handle,
+                "alias": "Popup voice",
+            })
         )
 
     assert result["success"] is True
@@ -267,9 +650,10 @@ def test_delete_uses_owned_id_and_leaves_minimal_tombstone(tmp_path, monkeypatch
     monkeypatch.setenv("HERMES_SESSION_USER_TEXT", phrase)
     with patch.object(tools, "request_json", return_value=(204, {})) as request:
         deleted = json.loads(
-            tools.fishaudio_voice_delete(
-                {"voice": "My private voice", "confirmation": phrase}
-            )
+            tools.fishaudio_voice_delete({
+                "voice": "My private voice",
+                "confirmation": phrase,
+            })
         )
 
     assert deleted["deleted"] is True
@@ -292,7 +676,10 @@ def test_get_resolves_owned_alias_before_api_call(tmp_path, monkeypatch):
     with patch.object(
         tools,
         "request_json",
-        return_value=(200, {"_id": "voice-123", "visibility": "private", "state": "trained"}),
+        return_value=(
+            200,
+            {"_id": "voice-123", "visibility": "private", "state": "trained"},
+        ),
     ) as request:
         result = json.loads(tools.fishaudio_voice_get({"voice": "My private voice"}))
 
@@ -303,7 +690,9 @@ def test_get_resolves_owned_alias_before_api_call(tmp_path, monkeypatch):
 
 def test_set_default_resolves_owned_alias_and_signals_refresh(tmp_path, monkeypatch):
     assert _confirm_create(tmp_path, monkeypatch)["success"]
-    result = json.loads(tools.fishaudio_voice_set_default({"voice": "My private voice"}))
+    result = json.loads(
+        tools.fishaudio_voice_set_default({"voice": "My private voice"})
+    )
 
     assert result["is_default"] is True
     assert result["refresh_voices"] is True
@@ -311,7 +700,9 @@ def test_set_default_resolves_owned_alias_and_signals_refresh(tmp_path, monkeypa
     assert config["tts"]["fishaudio"]["reference_id"] == "voice-123"
 
 
-def test_gateway_owner_dm_allowed_but_group_and_other_actor_denied(tmp_path, monkeypatch):
+def test_gateway_owner_dm_allowed_but_group_and_other_actor_denied(
+    tmp_path, monkeypatch
+):
     ledger = {
         "version": 1,
         "owner_actor": "",
