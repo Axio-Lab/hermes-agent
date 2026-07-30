@@ -444,6 +444,33 @@ def _path_env_key(run_env: dict) -> str | None:
     return None
 
 
+# Never bridge these session ContextVars into shell subprocess env.
+# ``HERMES_SESSION_USER_TEXT`` holds the full triggering user message and can
+# be a pasted transcript well over Linux ``MAX_ARG_STRLEN`` (131072 bytes).
+# Putting it in ``env=`` for ``bash -c`` raises
+# ``OSError: [Errno 7] Argument list too long`` and breaks write_file/terminal
+# for that turn. In-process tools already read it via ``get_session_env``.
+_SUBPROCESS_SESSION_ENV_BLOCKLIST = frozenset({
+    "HERMES_SESSION_USER_TEXT",
+})
+
+# Soft cap under Linux MAX_ARG_STRLEN so a single KEY=VALUE never trips E2BIG.
+_MAX_SUBPROCESS_ENV_VALUE_BYTES = 100_000
+
+
+def _env_value_within_exec_limit(key: str, value: object) -> bool:
+    """Return False when ``key=value`` would exceed the execve string cap."""
+    if value is None:
+        return False
+    if not isinstance(value, str):
+        try:
+            value = str(value)
+        except Exception:
+            return False
+    # execve counts the full ``KEY=VALUE`` string against MAX_ARG_STRLEN.
+    return len(key) + 1 + len(value.encode("utf-8", errors="replace")) <= _MAX_SUBPROCESS_ENV_VALUE_BYTES
+
+
 def _make_run_env(env: dict) -> dict:
     """Build a run environment with a sane PATH and provider-var stripping."""
     try:
@@ -454,11 +481,27 @@ def _make_run_env(env: dict) -> dict:
     merged = dict(os.environ | env)
     run_env = {}
     for k, v in merged.items():
+        if k in _SUBPROCESS_SESSION_ENV_BLOCKLIST:
+            continue
         if k.startswith(_HERMES_PROVIDER_ENV_FORCE_PREFIX):
             real_key = k[len(_HERMES_PROVIDER_ENV_FORCE_PREFIX):]
-            run_env[real_key] = v
+            if _env_value_within_exec_limit(real_key, v):
+                run_env[real_key] = v
+            else:
+                logger.warning(
+                    "Omitting oversized env var %s (%s bytes) from terminal subprocess",
+                    real_key,
+                    len(str(v).encode("utf-8", errors="replace")),
+                )
         elif k not in _HERMES_PROVIDER_ENV_BLOCKLIST or _is_passthrough(k):
-            run_env[k] = v
+            if _env_value_within_exec_limit(k, v):
+                run_env[k] = v
+            else:
+                logger.warning(
+                    "Omitting oversized env var %s (%s bytes) from terminal subprocess",
+                    k,
+                    len(str(v).encode("utf-8", errors="replace")),
+                )
     path_key = _path_env_key(run_env)
     if path_key is not None:
         new_path = _append_missing_sane_path_entries(run_env.get(path_key, ""))
@@ -474,12 +517,23 @@ def _make_run_env(env: dict) -> dict:
 
     # Inject ContextVar-based session vars into subprocess env.
     # ContextVars don't propagate to child processes, so we bridge them here.
+    # Skip USER_TEXT and any other value that would blow the execve string cap.
     try:
         from gateway.session_context import _UNSET, _VAR_MAP
         for var_name, var in _VAR_MAP.items():
+            if var_name in _SUBPROCESS_SESSION_ENV_BLOCKLIST:
+                continue
             value = var.get()
             if value is not _UNSET and value:
-                run_env[var_name] = value
+                if _env_value_within_exec_limit(var_name, value):
+                    run_env[var_name] = value
+                else:
+                    logger.warning(
+                        "Omitting oversized session env var %s (%s bytes) "
+                        "from terminal subprocess",
+                        var_name,
+                        len(str(value).encode("utf-8", errors="replace")),
+                    )
     except Exception:
         pass
 

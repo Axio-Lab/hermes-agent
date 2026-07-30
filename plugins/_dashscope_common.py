@@ -19,14 +19,40 @@ logger = logging.getLogger(__name__)
 DEFAULT_BASE_URL = "https://dashscope-intl.aliyuncs.com/api/v1"
 ENV_API_KEY = "DASHSCOPE_API_KEY"
 ENV_BASE_URL = "DASHSCOPE_BASE_URL"
+# UI labels strip ``_API_KEY`` → "DASHSCOPE"; custom Tools rows often save
+# ``DASHSCOPE`` / ``DASHSCOPE_KEY``. Accept those aliases so video/image/TTS
+# still resolve after a Tools & Keys save.
+_ENV_API_KEY_ALIASES = (ENV_API_KEY, "DASHSCOPE_KEY", "DASHSCOPE")
+
+
+def _env_lookup(name: str) -> str:
+    """Read an env value from the process, falling back to ``~/.hermes/.env``.
+
+    The gateway process may not have been restarted after a Tools & Keys save;
+    ``get_env_value`` still picks up the file-backed key (same pattern as the
+    OpenAI image plugin).
+    """
+    direct = (os.environ.get(name) or "").strip()
+    if direct:
+        return direct
+    try:
+        from hermes_cli.config import get_env_value
+
+        return (get_env_value(name) or "").strip()
+    except Exception:
+        return ""
 
 
 def api_key() -> str:
-    return (os.environ.get(ENV_API_KEY) or "").strip()
+    for key_name in _ENV_API_KEY_ALIASES:
+        value = _env_lookup(key_name)
+        if value:
+            return value
+    return ""
 
 
 def base_url() -> str:
-    raw = (os.environ.get(ENV_BASE_URL) or DEFAULT_BASE_URL).strip().rstrip("/")
+    raw = (_env_lookup(ENV_BASE_URL) or DEFAULT_BASE_URL).strip().rstrip("/")
     return raw or DEFAULT_BASE_URL
 
 

@@ -62,6 +62,8 @@ class TestFamilyResolution:
 class TestGenerate:
     def test_auth_required(self, monkeypatch):
         monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+        monkeypatch.delenv("DASHSCOPE_KEY", raising=False)
+        monkeypatch.delenv("DASHSCOPE", raising=False)
         result = dashscope_video.DashScopeVideoGenProvider().generate("a cat runs")
         assert result["success"] is False
         assert result["error_type"] == "auth_required"

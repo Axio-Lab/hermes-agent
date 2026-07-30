@@ -3152,11 +3152,18 @@ OPTIONAL_ENV_VARS = {
         "category": "provider",
     },
     "DASHSCOPE_API_KEY": {
-        "description": "Alibaba Cloud DashScope API key (Qwen + multi-provider models)",
+        "description": (
+            "DashScope API key (exact env name: DASHSCOPE_API_KEY) for Qwen chat "
+            "plus AI image and video generation"
+        ),
         "prompt": "DashScope API Key",
         "url": "https://modelstudio.console.alibabacloud.com/",
         "password": True,
+        # Provider category keeps it on Providers → API keys (BYOK). Verxio also
+        # surfaces this row under Tools & Keys → Tools for hosted users who cannot
+        # open the provider keys view.
         "category": "provider",
+        "tools": ["image_generate", "video_generate"],
     },
     "FISH_AUDIO_API_KEY": {
         "description": "Fish Audio API key for text-to-speech, voices, and transcription",
@@ -6310,6 +6317,15 @@ def _check_non_ascii_credential(key: str, value: str) -> str:
     return sanitized
 
 
+# Custom Tools & Keys rows often use the pretty UI label as the env name
+# (e.g. "DASHSCOPE" after the UI strips ``_API_KEY``). Canonicalize so media
+# plugins that only document ``DASHSCOPE_API_KEY`` still find the secret.
+_ENV_KEY_ALIASES = {
+    "DASHSCOPE": "DASHSCOPE_API_KEY",
+    "DASHSCOPE_KEY": "DASHSCOPE_API_KEY",
+}
+
+
 def save_env_value(key: str, value: str):
     """Save or update a value in ~/.hermes/.env."""
     if is_managed():
@@ -6319,6 +6335,7 @@ def save_env_value(key: str, value: str):
     # managed .env wins at load anyway. Distinct from is_managed() above.
     from hermes_cli import managed_scope
 
+    key = _ENV_KEY_ALIASES.get(key.upper(), key)
     if managed_scope.is_env_managed(key):
         managed_dir = managed_scope.get_managed_dir()
         src = (managed_dir / ".env") if managed_dir else "the managed scope"
@@ -6397,6 +6414,8 @@ def save_env_value(key: str, value: str):
     invalidate_env_cache()
     if key in {"OPENAI_API_KEY", "OPEN_AI_KEY"}:
         _pin_image_gen_openai_provider()
+    if key == "DASHSCOPE_API_KEY":
+        _pin_video_gen_dashscope_provider()
 
 
 def _pin_image_gen_openai_provider() -> None:
@@ -6436,6 +6455,29 @@ def _pin_image_gen_openai_provider() -> None:
         logger.debug("Could not pin image_gen.provider to openai: %s", exc)
 
 
+def _pin_video_gen_dashscope_provider() -> None:
+    """Point ``video_gen.provider`` at DashScope after a DashScope key save."""
+    try:
+        cfg = load_config()
+        if not isinstance(cfg, dict):
+            return
+        section = cfg.get("video_gen")
+        if not isinstance(section, dict):
+            section = {}
+        current = str(section.get("provider") or "").strip().lower()
+        if current == "dashscope" and str(section.get("model") or "").strip():
+            return
+        next_section = dict(section)
+        next_section["provider"] = "dashscope"
+        if not str(next_section.get("model") or "").strip():
+            next_section["model"] = "happyhorse-1.1"
+        cfg["video_gen"] = next_section
+        save_config(cfg)
+        logger.info("Pinned video_gen.provider=dashscope after DashScope API key save")
+    except Exception as exc:
+        logger.debug("Could not pin video_gen.provider to dashscope: %s", exc)
+
+
 def remove_env_value(key: str) -> bool:
     """Remove a key from ~/.hermes/.env and os.environ.
 
@@ -6447,6 +6489,7 @@ def remove_env_value(key: str) -> bool:
     # Managed scope guard: a managed env key can't be removed by the user.
     from hermes_cli import managed_scope
 
+    key = _ENV_KEY_ALIASES.get(key.upper(), key)
     if managed_scope.is_env_managed(key):
         managed_dir = managed_scope.get_managed_dir()
         src = (managed_dir / ".env") if managed_dir else "the managed scope"

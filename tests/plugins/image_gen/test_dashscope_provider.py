@@ -47,6 +47,8 @@ class TestMetadata:
 class TestAvailability:
     def test_no_api_key_unavailable(self, monkeypatch):
         monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+        monkeypatch.delenv("DASHSCOPE_KEY", raising=False)
+        monkeypatch.delenv("DASHSCOPE", raising=False)
         assert dashscope_plugin.DashScopeImageGenProvider().is_available() is False
 
     def test_api_key_set_available(self, monkeypatch):

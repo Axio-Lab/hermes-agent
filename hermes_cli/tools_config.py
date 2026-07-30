@@ -149,7 +149,12 @@ def _dashscope_credentials_present() -> bool:
     xAI credentials — otherwise image→video requests silently fall back to
     ffmpeg Ken Burns because ``video_gen`` is in ``_DEFAULT_OFF_TOOLSETS``.
     """
-    return bool(str(os.environ.get("DASHSCOPE_API_KEY") or "").strip())
+    try:
+        from plugins._dashscope_common import api_key
+
+        return bool(api_key())
+    except Exception:
+        return bool(str(os.environ.get("DASHSCOPE_API_KEY") or "").strip())
 
 # Platform-scoped toolsets: only appear in the `hermes tools` checklist for
 # these platforms, and only resolve/save for these platforms.  A toolset

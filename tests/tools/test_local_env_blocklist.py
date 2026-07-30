@@ -563,3 +563,50 @@ class TestHermesBinDirOnPath:
         entries = result["PATH"].split(os.pathsep)
         assert entries[0] == "/opt/hermes/bin"
         assert "/usr/bin" in entries
+
+
+class TestMakeRunEnvExecArgLimits:
+    """Oversized session/user text must not land in subprocess env (E2BIG)."""
+
+    def test_make_run_env_omits_session_user_text_from_os_environ(self):
+        from tools.environments.local import _make_run_env
+
+        huge = "x" * 180_000
+        with patch.dict(
+            os.environ,
+            {"PATH": "/usr/bin:/bin", "HERMES_SESSION_USER_TEXT": huge},
+            clear=True,
+        ):
+            result = _make_run_env({})
+        assert "HERMES_SESSION_USER_TEXT" not in result
+
+    def test_make_run_env_omits_session_user_text_contextvar(self, monkeypatch):
+        from gateway.session_context import set_session_vars, clear_session_vars
+        from tools.environments.local import _make_run_env
+
+        tokens = set_session_vars(
+            user_text="y" * 180_000,
+            session_id="sess_test",
+            platform="tui",
+        )
+        try:
+            with patch.dict(os.environ, {"PATH": "/usr/bin:/bin"}, clear=True):
+                result = _make_run_env({})
+            assert "HERMES_SESSION_USER_TEXT" not in result
+            assert result.get("HERMES_SESSION_ID") == "sess_test"
+            assert result.get("HERMES_SESSION_PLATFORM") == "tui"
+        finally:
+            clear_session_vars(tokens)
+
+    def test_make_run_env_omits_other_oversized_values(self):
+        from tools.environments.local import _make_run_env
+
+        huge = "z" * 180_000
+        with patch.dict(
+            os.environ,
+            {"PATH": "/usr/bin:/bin", "CUSTOM_BLOB": huge, "SMALL": "ok"},
+            clear=True,
+        ):
+            result = _make_run_env({})
+        assert "CUSTOM_BLOB" not in result
+        assert result.get("SMALL") == "ok"
