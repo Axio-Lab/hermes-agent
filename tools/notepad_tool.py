@@ -203,6 +203,11 @@ def _handle_notepad(args: Dict[str, Any], **_kw: Any) -> str:
                 body[key] = args[key]
         if "folder_id" in args:
             body["folder_id"] = folder_id
+        # Summary is what the Notepad Summary pane + public share URL show.
+        # When the agent rewrites ``content`` without ``summary``, mirror so
+        # the UI/share surface doesn't keep the previous revision.
+        if "content" in body and "summary" not in body:
+            body["summary"] = body["content"]
         if not body:
             return json.dumps(
                 {"ok": False, "error": "Provide at least one field to update"},
@@ -295,11 +300,11 @@ NOTEPAD_SCHEMA = {
         "Use this from chat or messaging (Telegram/Slack/WhatsApp) to list notes, "
         "read a note, create/update notes, generate a summary, or create a public "
         "summary share URL. "
-        "IMPORTANT: the public share URL displays the `summary` field. When the "
-        "user wants a shareable playbook/digest/document, put that full packaged "
-        "markdown in `summary` (and optionally mirror it in `content`). Prefer "
-        "this over inventing local .md files when the user asks about their "
-        "notepad or notes."
+        "IMPORTANT: the Notepad Summary pane and public share URL display the "
+        "`summary` field (not only `content`). On create/update, put the full "
+        "note markdown in both `content` and `summary`, or at least in "
+        "`summary`. Prefer this over inventing local .md files when the user "
+        "asks about their notepad or notes."
     ),
     "parameters": {
         "type": "object",
