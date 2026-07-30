@@ -2533,11 +2533,30 @@ def _detect_active_provider_index(
     *,
     force_fresh: bool = False,
 ) -> int:
-    """Return the index of the currently active provider, or 0."""
+    """Return the index of the currently active provider, or 0.
+
+    Prefer an explicit config match (``image_gen.provider``, ``tts.provider``,
+    etc.) over "has API keys". Falling back to the first provider with keys
+    made DashScope look active whenever ``DASHSCOPE_API_KEY`` was set, even
+    after the user switched to OpenAI.
+    """
     for i, p in enumerate(providers):
         if _is_provider_active(p, config, force_fresh=force_fresh):
             return i
-        # Fallback: env vars present → likely configured
+
+    for i, p in enumerate(providers):
+        # Env-only rows (no plugin/config pin) still use keys as a hint.
+        if (
+            p.get("image_gen_plugin_name")
+            or p.get("video_gen_plugin_name")
+            or p.get("tts_plugin_name")
+            or p.get("tts_provider")
+            or p.get("imagegen_backend")
+            or p.get("web_backend")
+            or "browser_provider" in p
+            or p.get("managed_nous_feature")
+        ):
+            continue
         env_vars = p.get("env_vars", [])
         if env_vars and all(get_env_value(v["key"]) for v in env_vars):
             return i
@@ -3028,12 +3047,38 @@ def apply_provider_selection(ts_key: str, provider_name: str, config: dict) -> N
             config["image_gen"] = img_cfg
         img_cfg["provider"] = plugin_name
         img_cfg["use_gateway"] = bool(managed_feature)
-        if plugin_name == "dashscope" and not img_cfg.get("model"):
-            img_cfg["model"] = "qwen-image-2.0-pro"
-        if plugin_name == "google" and not img_cfg.get("model"):
-            img_cfg["model"] = "nano-banana"
-        if plugin_name == "openai" and not img_cfg.get("model"):
-            img_cfg["model"] = "gpt-image-2-medium"
+        # Always pin a model that belongs to the newly selected provider.
+        # Leaving a DashScope model id under provider=openai (or the reverse)
+        # confuses the Verxio Toolsets summary and can look like the switch
+        # failed even when the backend routes correctly.
+        _IMAGE_GEN_DEFAULT_MODELS = {
+            "dashscope": "qwen-image-2.0-pro",
+            "google": "nano-banana",
+            "openai": "gpt-image-2-medium",
+            "openai-codex": "gpt-image-2-medium",
+        }
+        _IMAGE_GEN_MODEL_ALLOWLISTS = {
+            "dashscope": {
+                "qwen-image-2.0-pro",
+                "qwen-image-2.0",
+                "qwen-image-max",
+                "qwen-image-plus",
+                "qwen-image-edit-plus",
+                "qwen-image-edit-max",
+                "qwen-image-edit",
+                "wan2.7-image-pro",
+                "wan2.7-image",
+                "z-image-turbo",
+            },
+            "google": {"nano-banana", "nano-banana-pro"},
+            "openai": {"gpt-image-2-low", "gpt-image-2-medium", "gpt-image-2-high"},
+            "openai-codex": {"gpt-image-2-low", "gpt-image-2-medium", "gpt-image-2-high"},
+        }
+        default_model = _IMAGE_GEN_DEFAULT_MODELS.get(plugin_name)
+        allowlist = _IMAGE_GEN_MODEL_ALLOWLISTS.get(plugin_name)
+        current_model = str(img_cfg.get("model") or "").strip()
+        if default_model and (not current_model or (allowlist and current_model not in allowlist)):
+            img_cfg["model"] = default_model
 
     video_plugin = provider.get("video_gen_plugin_name")
     if video_plugin:
