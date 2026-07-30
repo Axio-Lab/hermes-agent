@@ -42,8 +42,14 @@ the tool surface stable as new providers ship with different capabilities.
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
+import os
+import shutil
+import urllib.request
+import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from agent.video_gen_provider import (
@@ -309,6 +315,141 @@ def _normalize_reference_images(value: Any) -> Optional[List[str]]:
     return out or None
 
 
+def _looks_like_absolute_file_path(value: str) -> bool:
+    if not value or not isinstance(value, str):
+        return False
+    lower = value.lower()
+    if lower.startswith(("http://", "https://", "data:")):
+        return False
+    if os.path.isabs(value):
+        return True
+    return len(value) >= 3 and value[1] == ":" and value[2] in {"/", "\\"}
+
+
+def _verxio_artifacts_dir() -> Path | None:
+    """Return the Verxio artifact directory when this runtime exposes one."""
+    explicit = os.getenv("VERXIO_ARTIFACTS_DIR", "").strip()
+    if explicit:
+        path = Path(explicit).expanduser()
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    workspace_artifacts = Path("/workspace/artifacts")
+    if workspace_artifacts.exists() and workspace_artifacts.is_dir():
+        return workspace_artifacts
+
+    return None
+
+
+def _artifact_extension(value: str, content_type: str | None = None) -> str:
+    if content_type:
+        mapped = {
+            "video/mp4": "mp4",
+            "video/webm": "webm",
+            "video/quicktime": "mov",
+            "video/x-msvideo": "avi",
+            "video/x-matroska": "mkv",
+        }.get(content_type.split(";", 1)[0].strip().lower())
+        if mapped:
+            return mapped
+
+    lower = value.split("?", 1)[0].lower()
+    for ext in ("mp4", "webm", "mov", "avi", "mkv"):
+        if lower.endswith(f".{ext}"):
+            return ext
+
+    return "mp4"
+
+
+def _artifact_filename(payload: dict[str, Any], source: str, extension: str) -> str:
+    raw_prompt = str(payload.get("prompt") or "generated video").lower()
+    slug = "".join(ch if ch.isalnum() else "_" for ch in raw_prompt).strip("_")
+    slug = "_".join(part for part in slug.split("_") if part)[:48] or "generated_video"
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    short = uuid.uuid4().hex[:8]
+    return f"{slug}_{ts}_{short}.{extension}"
+
+
+def _materialize_verxio_artifact(payload: dict[str, Any]) -> str | None:
+    """Copy/download a generated video into `/workspace/artifacts` for Verxio.
+
+    Providers commonly land files under Hermes cache (``/opt/data/cache/videos``).
+    The web UI only previews paths under ``/workspace/artifacts``, so we promote
+    successful local/URL results there — same contract as ``image_generate``.
+    """
+    artifact_dir = _verxio_artifacts_dir()
+    if artifact_dir is None:
+        return None
+
+    video = payload.get("video")
+    if not isinstance(video, str) or not video.strip():
+        return None
+
+    source = video.strip()
+    if source.startswith(("http://", "https://")):
+        with urllib.request.urlopen(source, timeout=120) as response:  # noqa: S310 - provider URL
+            content_type = response.headers.get("Content-Type")
+            extension = _artifact_extension(source, content_type)
+            target = artifact_dir / _artifact_filename(payload, source, extension)
+            with target.open("wb") as fh:
+                shutil.copyfileobj(response, fh)
+    elif _looks_like_absolute_file_path(source):
+        source_path = Path(source).expanduser()
+        if not source_path.exists() or not source_path.is_file():
+            return None
+        # Already under the artifacts dir — keep as-is.
+        try:
+            source_path.resolve().relative_to(artifact_dir.resolve())
+            return str(source_path)
+        except (OSError, ValueError):
+            pass
+        extension = _artifact_extension(source_path.name)
+        target = artifact_dir / _artifact_filename(payload, source, extension)
+        if source_path.resolve() != target.resolve():
+            shutil.copy2(source_path, target)
+    else:
+        return None
+
+    if not target.exists() or target.stat().st_size <= 0:
+        return None
+
+    return str(target)
+
+
+def _postprocess_video_generate_result(raw: str | dict[str, Any]) -> str:
+    """Annotate successful video results with a Verxio-visible artifact path."""
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        return raw if isinstance(raw, str) else json.dumps(raw)
+
+    if not isinstance(payload, dict) or not payload.get("success"):
+        return json.dumps(payload) if isinstance(payload, dict) else (raw if isinstance(raw, str) else json.dumps(raw))
+
+    video = payload.get("video")
+    if not isinstance(video, str) or not video.strip():
+        payload.update({
+            "success": False,
+            "video": None,
+            "error": "Video provider reported success without returning a video.",
+            "error_type": "empty_video_result",
+        })
+        return json.dumps(payload, ensure_ascii=False)
+
+    try:
+        artifact_path = _materialize_verxio_artifact(payload)
+    except Exception as exc:  # noqa: BLE001 - generation succeeded; preserve result
+        logger.warning("Could not materialize generated video artifact: %s", exc)
+        artifact_path = None
+
+    if artifact_path:
+        payload.setdefault("original_video", video)
+        payload["video"] = artifact_path
+        payload["host_video"] = artifact_path
+
+    return json.dumps(payload, ensure_ascii=False)
+
+
 def _handle_video_generate(args: Dict[str, Any], **_kw: Any) -> str:
     prompt = (args.get("prompt") or "").strip()
     image_url = (args.get("image_url") or "").strip() or None
@@ -393,7 +534,7 @@ def _handle_video_generate(args: Dict[str, Any], **_kw: Any) -> str:
             prompt=prompt,
         ))
 
-    return json.dumps(result)
+    return _postprocess_video_generate_result(result)
 
 
 # ---------------------------------------------------------------------------
