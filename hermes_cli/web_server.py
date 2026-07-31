@@ -54,6 +54,7 @@ from hermes_cli.config import (
     get_hermes_home,
     load_config,
     load_env,
+    read_raw_config,
     save_config,
     save_env_value,
     remove_env_value,
@@ -4291,7 +4292,46 @@ def _denormalize_config_from_web(config: Dict[str, Any]) -> Dict[str, Any]:
                     }
             except Exception:
                 pass  # can't read disk config — just use the string form
+
+    # Full-document PUTs from the web UI often omit media sections (GET has no
+    # image_gen/video_gen when unset in DEFAULT_CONFIG). Without this, a
+    # language/settings save wipes a Toolsets provider pin and the runtime
+    # falls back to DashScope whenever DASHSCOPE_API_KEY is present.
+    _preserve_media_provider_sections(config)
     return config
+
+
+def _preserve_media_provider_sections(config: Dict[str, Any]) -> None:
+    """Keep on-disk image_gen/video_gen pins when the PUT body drops them."""
+    try:
+        disk_config = read_raw_config()
+    except Exception:
+        return
+    if not isinstance(disk_config, dict):
+        return
+
+    for key in ("image_gen", "video_gen"):
+        disk_section = disk_config.get(key)
+        if not isinstance(disk_section, dict):
+            continue
+        disk_provider = str(disk_section.get("provider") or "").strip()
+        if not disk_provider:
+            continue
+
+        incoming = config.get(key)
+        if incoming is None:
+            config[key] = dict(disk_section)
+            continue
+        if not isinstance(incoming, dict):
+            config[key] = dict(disk_section)
+            continue
+        if not str(incoming.get("provider") or "").strip():
+            # Merge: keep explicit incoming fields, restore provider (+ model if missing).
+            merged = dict(disk_section)
+            merged.update({k: v for k, v in incoming.items() if v is not None})
+            if not str(merged.get("provider") or "").strip():
+                merged["provider"] = disk_provider
+            config[key] = merged
 
 
 @app.put("/api/config")

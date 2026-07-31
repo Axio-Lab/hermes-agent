@@ -2908,6 +2908,39 @@ class TestConfigRoundTrip:
         assert set(after["model"].keys()) >= original_keys, \
             f"Lost model subkeys: {original_keys - set(after['model'].keys())}"
 
+    def test_round_trip_preserves_image_gen_provider(self):
+        """PUT /api/config must not wipe image_gen when the web body omits it."""
+        from hermes_cli.config import load_config, save_config
+
+        save_config({
+            "model": {"default": "anthropic/claude-sonnet-4", "provider": "openrouter"},
+            "image_gen": {
+                "provider": "openai",
+                "model": "gpt-image-2-medium",
+                "use_gateway": False,
+            },
+            "video_gen": {
+                "provider": "dashscope",
+                "model": "happyhorse-1.1",
+                "use_gateway": False,
+            },
+        })
+
+        web_config = self.client.get("/api/config").json()
+        # Simulate a settings save that never touched media toolsets.
+        web_config.pop("image_gen", None)
+        web_config.pop("video_gen", None)
+        web_config["image_gen"] = None
+        web_config["video_gen"] = None
+
+        resp = self.client.put("/api/config", json={"config": web_config})
+        assert resp.status_code == 200, resp.text
+
+        after = load_config()
+        assert after.get("image_gen", {}).get("provider") == "openai"
+        assert after.get("image_gen", {}).get("model") == "gpt-image-2-medium"
+        assert after.get("video_gen", {}).get("provider") == "dashscope"
+
     def test_edit_model_name_preserved(self):
         """Changing the model string should update model.default on disk."""
         from hermes_cli.config import load_config
