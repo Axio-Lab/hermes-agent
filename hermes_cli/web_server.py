@@ -4298,6 +4298,11 @@ def _denormalize_config_from_web(config: Dict[str, Any]) -> Dict[str, Any]:
     # language/settings save wipes a Toolsets provider pin and the runtime
     # falls back to DashScope whenever DASHSCOPE_API_KEY is present.
     _preserve_media_provider_sections(config)
+    # Same class of wipe for the main chat model: a partial PUT that drops
+    # model.provider/default leaves resolve_provider('auto') free to pick a
+    # stale auth.json active_provider (e.g. openai-codex) while the UI still
+    # thinks Verxio Hosted Gemini/Qwen is selected.
+    _preserve_main_model_section(config)
     return config
 
 
@@ -4332,6 +4337,49 @@ def _preserve_media_provider_sections(config: Dict[str, Any]) -> None:
             if not str(merged.get("provider") or "").strip():
                 merged["provider"] = disk_provider
             config[key] = merged
+
+
+def _preserve_main_model_section(config: Dict[str, Any]) -> None:
+    """Keep on-disk model.provider/default when a PUT would leave them empty."""
+    try:
+        disk_config = read_raw_config()
+    except Exception:
+        return
+    if not isinstance(disk_config, dict):
+        return
+
+    disk_model = disk_config.get("model")
+    if not isinstance(disk_model, dict):
+        return
+    disk_default = str(disk_model.get("default") or disk_model.get("model") or "").strip()
+    disk_provider = str(disk_model.get("provider") or "").strip()
+    if not disk_default and not disk_provider:
+        return
+
+    incoming = config.get("model")
+    if incoming is None:
+        config["model"] = dict(disk_model)
+        return
+    if isinstance(incoming, str):
+        # Empty string handled above in denormalize; non-empty string already
+        # merged into a dict. Bare leftover strings with no default stay as-is.
+        return
+    if not isinstance(incoming, dict):
+        config["model"] = dict(disk_model)
+        return
+
+    incoming_default = str(incoming.get("default") or incoming.get("model") or "").strip()
+    incoming_provider = str(incoming.get("provider") or "").strip()
+    if incoming_default and incoming_provider:
+        return
+
+    merged = dict(disk_model)
+    merged.update({k: v for k, v in incoming.items() if v is not None})
+    if not str(merged.get("default") or merged.get("model") or "").strip() and disk_default:
+        merged["default"] = disk_default
+    if not str(merged.get("provider") or "").strip() and disk_provider:
+        merged["provider"] = disk_provider
+    config["model"] = merged
 
 
 @app.put("/api/config")

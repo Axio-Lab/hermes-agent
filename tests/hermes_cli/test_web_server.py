@@ -2941,6 +2941,28 @@ class TestConfigRoundTrip:
         assert after.get("image_gen", {}).get("model") == "gpt-image-2-medium"
         assert after.get("video_gen", {}).get("provider") == "dashscope"
 
+    def test_round_trip_preserves_main_model_provider(self):
+        """PUT /api/config must not wipe model.provider when the body drops it."""
+        from hermes_cli.config import load_config, save_config
+
+        save_config({
+            "model": {
+                "default": "gemini-flash-lite-latest",
+                "provider": "gemini",
+            },
+        })
+
+        web_config = self.client.get("/api/config").json()
+        # Simulate a settings save that sends an empty model dict / no provider.
+        web_config["model"] = {"default": ""}
+
+        resp = self.client.put("/api/config", json={"config": web_config})
+        assert resp.status_code == 200, resp.text
+
+        after = load_config()
+        assert after.get("model", {}).get("provider") == "gemini"
+        assert after.get("model", {}).get("default") == "gemini-flash-lite-latest"
+
     def test_edit_model_name_preserved(self):
         """Changing the model string should update model.default on disk."""
         from hermes_cli.config import load_config
