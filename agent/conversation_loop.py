@@ -488,6 +488,12 @@ def _sync_failover_system_message(agent, api_messages, active_system_prompt):
         effective = sp
         if agent.ephemeral_system_prompt:
             effective = (effective + "\n\n" + agent.ephemeral_system_prompt).strip()
+        try:
+            from agent.prompt_builder import append_verxio_live_media_status
+
+            effective = append_verxio_live_media_status(effective)
+        except Exception:
+            pass
         api_messages[0]["content"] = effective
     return sp
 
@@ -798,6 +804,12 @@ def run_conversation(
         effective_system = active_system_prompt or ""
         if agent.ephemeral_system_prompt:
             effective_system = (effective_system + "\n\n" + agent.ephemeral_system_prompt).strip()
+        try:
+            from agent.prompt_builder import append_verxio_live_media_status
+
+            effective_system = append_verxio_live_media_status(effective_system)
+        except Exception:
+            pass
         if effective_system:
             api_messages = [{"role": "system", "content": effective_system}] + api_messages
 

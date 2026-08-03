@@ -1549,8 +1549,9 @@ class TestParallelToolCallGuidance:
 
 
 def test_build_verxio_active_media_status_reads_config(monkeypatch, tmp_path):
-    from agent.prompt_builder import build_verxio_active_media_status
+    from agent.prompt_builder import append_verxio_live_media_status, build_verxio_active_media_status
 
+    monkeypatch.setenv("VERXIO_HOSTED", "1")
     cfg = {
         "image_gen": {"provider": "openai", "model": "gpt-image-2-medium"},
         "video_gen": {"provider": "dashscope", "model": "happyhorse-1.1"},
@@ -1561,3 +1562,11 @@ def test_build_verxio_active_media_status_reads_config(monkeypatch, tmp_path):
     assert "gpt-image-2-medium" in text
     assert "provider=dashscope" in text
     assert "happyhorse-1.1" in text
+    assert "source of truth for this turn" in text
+
+    appended = append_verxio_live_media_status("base prompt")
+    assert appended.startswith("base prompt")
+    assert "provider=openai" in appended
+
+    monkeypatch.delenv("VERXIO_HOSTED", raising=False)
+    assert build_verxio_active_media_status() == ""

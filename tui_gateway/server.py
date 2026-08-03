@@ -3644,6 +3644,32 @@ def refresh_live_session_system_prompts() -> int:
     return updated
 
 
+def invalidate_live_session_system_prompts() -> int:
+    """Drop cached system prompts so the next turn rebuilds from disk.
+
+    Skills → Toolsets image/video provider switches used to leave the old
+    ``Current Image Generation`` pin frozen in ``_cached_system_prompt`` for
+    the rest of the chat. Live media pins are also appended per turn, but
+    clearing the cache removes contradictory stale lines from the base prompt.
+    """
+    updated = 0
+    for _sid, session in list(_sessions.items()):
+        if not isinstance(session, dict):
+            continue
+        agent = session.get("agent")
+        if agent is None:
+            continue
+        if hasattr(agent, "_invalidate_system_prompt"):
+            try:
+                agent._invalidate_system_prompt()
+            except Exception:
+                agent._cached_system_prompt = None
+        else:
+            agent._cached_system_prompt = None
+        updated += 1
+    return updated
+
+
 def _apply_personality_to_session(
     sid: str, session: dict, new_prompt: str, personality: str = ""
 ) -> tuple[bool, dict | None]:

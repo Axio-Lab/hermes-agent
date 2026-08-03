@@ -12430,6 +12430,22 @@ async def select_toolset_provider(
         except KeyError as exc:
             raise HTTPException(status_code=400, detail=str(exc).strip('"'))
         save_config(config)
+
+    # Image/video pins must take effect on the next chat turn without a new
+    # session. Drop cached system prompts so stale "Current Image Generation"
+    # lines are not frozen for the rest of the conversation.
+    if name in {"image_gen", "video_gen"}:
+        try:
+            from tui_gateway import server as tui_server
+
+            tui_server.invalidate_live_session_system_prompts()
+        except Exception:
+            _log.debug(
+                "Could not invalidate live session prompts after %s provider select",
+                name,
+                exc_info=True,
+            )
+
     return {"ok": True, "name": name, "provider": body.provider}
 
 

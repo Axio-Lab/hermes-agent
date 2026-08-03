@@ -859,10 +859,13 @@ VERXIO_CREDENTIAL_GUIDANCE = (
 def build_verxio_active_media_status() -> str:
     """Return a short live pin of image/video toolset selection for Verxio.
 
-    Injected into the system prompt so "which image model are you using?"
-    answers from config.yaml rather than MEMORY preferences or DashScope
-    fallback lore.
+    Appended at API-call time (not baked into the session-cached system
+    prompt) so "which image model are you using?" tracks Skills → Toolsets
+    switches mid-chat instead of MEMORY preferences or a stale session pin.
     """
+    if os.getenv("VERXIO_HOSTED", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return ""
+
     try:
         from hermes_cli.config import load_config
     except Exception:
@@ -898,9 +901,22 @@ def build_verxio_active_media_status() -> str:
     if not lines:
         return ""
     return (
-        "Live Skills → Toolsets media pins (source of truth for this session):\n"
+        "Live Skills → Toolsets media pins (source of truth for this turn — "
+        "ignore any earlier/stale image_gen or video_gen mention in this prompt "
+        "or in MEMORY/USER profile):\n"
         + "\n".join(f"- {line}" for line in lines)
     )
+
+
+def append_verxio_live_media_status(effective_system: str) -> str:
+    """Append live media pins to the per-turn effective system prompt."""
+    media_status = build_verxio_active_media_status()
+    if not media_status:
+        return effective_system
+    base = (effective_system or "").strip()
+    if not base:
+        return media_status
+    return f"{base}\n\n{media_status}"
 
 # ---------------------------------------------------------------------------
 # Environment hints — execution-environment awareness for the agent.

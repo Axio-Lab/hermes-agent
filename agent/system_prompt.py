@@ -43,7 +43,6 @@ from agent.prompt_builder import (
     TOOL_USE_ENFORCEMENT_GUIDANCE,
     TOOL_USE_ENFORCEMENT_MODELS,
     VERXIO_CREDENTIAL_GUIDANCE,
-    build_verxio_active_media_status,
     drain_truncation_warnings,
 )
 from agent.runtime_cwd import resolve_context_cwd
@@ -405,10 +404,10 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         stable_parts.append(_effective_hint)
 
     if os.getenv("VERXIO_HOSTED", "").strip().lower() in {"1", "true", "yes", "on"}:
+        # Credential guidance is session-stable. Live image/video pins are
+        # appended per turn in conversation_loop / chat_completion_helpers so
+        # Skills → Toolsets switches take effect without a new chat.
         stable_parts.append(VERXIO_CREDENTIAL_GUIDANCE)
-        media_status = build_verxio_active_media_status()
-        if media_status:
-            stable_parts.append(media_status)
 
     # ── Context tier (cwd-dependent, may change between sessions) ─
     context_parts: List[str] = []
