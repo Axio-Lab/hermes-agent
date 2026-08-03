@@ -6034,6 +6034,44 @@ _COMMENTED_SECTIONS = """
 """
 
 
+def _preserve_media_provider_sections_on_save(config: Dict[str, Any]) -> None:
+    """Keep on-disk image_gen/video_gen pins when a save omits or blanks them.
+
+    Partial ``save_config`` callers (CLI chat init, migrations, settings
+    helpers) often pass a dict that never touched media toolsets. Without
+    this, those writes drop Skills → Toolsets provider pins and hosted
+    Verxio falls back to DashScope whenever ``DASHSCOPE_API_KEY`` is set.
+    """
+    try:
+        disk_config = read_raw_config()
+    except Exception:
+        return
+    if not isinstance(disk_config, dict):
+        return
+
+    for key in ("image_gen", "video_gen"):
+        disk_section = disk_config.get(key)
+        if not isinstance(disk_section, dict):
+            continue
+        disk_provider = str(disk_section.get("provider") or "").strip()
+        if not disk_provider:
+            continue
+
+        incoming = config.get(key)
+        if incoming is None:
+            config[key] = dict(disk_section)
+            continue
+        if not isinstance(incoming, dict):
+            config[key] = dict(disk_section)
+            continue
+        if not str(incoming.get("provider") or "").strip():
+            merged = dict(disk_section)
+            merged.update({k: v for k, v in incoming.items() if v is not None})
+            if not str(merged.get("provider") or "").strip():
+                merged["provider"] = disk_provider
+            config[key] = merged
+
+
 def save_config(config: Dict[str, Any]):
     """Save configuration to ~/.hermes/config.yaml."""
     with _CONFIG_LOCK:
@@ -6056,6 +6094,9 @@ def save_config(config: Dict[str, Any]):
                     f"(managed by your administrator): {', '.join(sorted(_stripped))}",
                     file=sys.stderr,
                 )
+        else:
+            config = copy.deepcopy(config)
+        _preserve_media_provider_sections_on_save(config)
         from utils import atomic_yaml_write
 
         ensure_hermes_home()

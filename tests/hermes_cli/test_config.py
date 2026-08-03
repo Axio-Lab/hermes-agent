@@ -247,6 +247,40 @@ class TestSaveAndLoadRoundtrip:
             assert saved["agent"]["max_turns"] == 37
             assert "max_turns" not in saved
 
+    def test_save_config_preserves_media_provider_pins(self, tmp_path):
+        """Partial saves must not drop Skills → Toolsets image/video pins."""
+        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+            save_config(
+                {
+                    "model": {"default": "gemini-flash-lite-latest", "provider": "gemini"},
+                    "image_gen": {
+                        "provider": "openai",
+                        "model": "gpt-image-2-medium",
+                        "use_gateway": False,
+                    },
+                    "video_gen": {
+                        "provider": "dashscope",
+                        "model": "happyhorse-1.1",
+                        "use_gateway": False,
+                    },
+                }
+            )
+
+            # Simulate a CLI/settings save that never touched media toolsets.
+            save_config(
+                {
+                    "model": {"default": "gemini-flash-lite-latest", "provider": "gemini"},
+                    "image_gen": None,
+                    "video_gen": None,
+                }
+            )
+
+            saved = yaml.safe_load((tmp_path / "config.yaml").read_text())
+            assert saved["image_gen"]["provider"] == "openai"
+            assert saved["image_gen"]["model"] == "gpt-image-2-medium"
+            assert saved["video_gen"]["provider"] == "dashscope"
+            assert saved["video_gen"]["model"] == "happyhorse-1.1"
+
     def test_nested_values_preserved(self, tmp_path):
         with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
             config = load_config()
