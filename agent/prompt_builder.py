@@ -833,7 +833,14 @@ VERXIO_CREDENTIAL_GUIDANCE = (
     "video_gen.provider — e.g. openai, google, dashscope, fal). Having "
     "DASHSCOPE_API_KEY saved only means that provider is available, not that "
     "it is selected. Do not tell the user GPT/OpenAI image is inactive when "
-    "image_gen.provider is openai. They can also save keys under Settings → "
+    "image_gen.provider is openai. "
+    "When the user asks which image or video generation model/provider is "
+    "active, answer ONLY from the current Skills → Toolsets selection: read "
+    "the Active backend / model line in the image_generate or video_generate "
+    "tool description, or the Current Image/Video Generation lines injected "
+    "below. Never answer from MEMORY, USER profile, or past preferences "
+    "(e.g. Nano Banana / gemini image) — those are historical likes, not the "
+    "live toolset pin. They can also save keys under Settings → "
     "Tools & Keys → Tools (use Add custom key for vars not listed). "
     "Provider/LLM keys live under Settings → Providers → API keys. After "
     "saving, credentials reload automatically; they should start a new chat "
@@ -847,6 +854,53 @@ VERXIO_CREDENTIAL_GUIDANCE = (
     "video_generate (image-to-video / text-to-video). Do not use another "
     "image_generate call as a substitute for either path."
 )
+
+
+def build_verxio_active_media_status() -> str:
+    """Return a short live pin of image/video toolset selection for Verxio.
+
+    Injected into the system prompt so "which image model are you using?"
+    answers from config.yaml rather than MEMORY preferences or DashScope
+    fallback lore.
+    """
+    try:
+        from hermes_cli.config import load_config
+    except Exception:
+        return ""
+
+    try:
+        cfg = load_config()
+    except Exception:
+        return ""
+    if not isinstance(cfg, dict):
+        return ""
+
+    lines: list[str] = []
+    image = cfg.get("image_gen") if isinstance(cfg.get("image_gen"), dict) else {}
+    video = cfg.get("video_gen") if isinstance(cfg.get("video_gen"), dict) else {}
+
+    image_provider = str(image.get("provider") or "").strip()
+    image_model = str(image.get("model") or "").strip()
+    if image_provider:
+        line = f"Current Image Generation: provider={image_provider}"
+        if image_model:
+            line += f", model={image_model}"
+        lines.append(line)
+
+    video_provider = str(video.get("provider") or "").strip()
+    video_model = str(video.get("model") or "").strip()
+    if video_provider:
+        line = f"Current Video Generation: provider={video_provider}"
+        if video_model:
+            line += f", model={video_model}"
+        lines.append(line)
+
+    if not lines:
+        return ""
+    return (
+        "Live Skills → Toolsets media pins (source of truth for this session):\n"
+        + "\n".join(f"- {line}" for line in lines)
+    )
 
 # ---------------------------------------------------------------------------
 # Environment hints — execution-environment awareness for the agent.

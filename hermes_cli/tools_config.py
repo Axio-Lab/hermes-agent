@@ -3027,7 +3027,10 @@ def apply_provider_selection(ts_key: str, provider_name: str, config: dict) -> N
     if cat is None:
         raise KeyError(f"Toolset has no configurable category: {ts_key}")
 
-    providers = _visible_providers(cat, config, force_fresh=True)
+    # GUI provider select must stay snappy — force_fresh hits Nous Portal and
+    # made Verxio Skills → Toolsets switches hang long enough that the pin
+    # never landed (DashScope fallback kept winning).
+    providers = _visible_providers(cat, config, force_fresh=False)
     provider = next((p for p in providers if p.get("name") == provider_name), None)
     if provider is None:
         raise KeyError(f"Unknown provider {provider_name!r} for toolset {ts_key!r}")

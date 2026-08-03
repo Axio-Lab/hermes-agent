@@ -12359,7 +12359,10 @@ async def get_toolset_config(name: str, profile: Optional[str] = None):
                         return True
                 return False
 
-            for prov in _visible_providers(cat, config, force_fresh=True):
+            # Cached subscription features are enough for the GUI matrix.
+            # force_fresh=True re-hit Nous Portal per open panel and made
+            # Skills → Toolsets feel stuck / time out on Verxio.
+            for prov in _visible_providers(cat, config, force_fresh=False):
                 env_vars = [
                     {
                         "key": e["key"],
@@ -12374,7 +12377,7 @@ async def get_toolset_config(name: str, profile: Optional[str] = None):
                 # uses (``_is_provider_active``) so the GUI highlights the provider
                 # actually written to config (e.g. web.backend), not just the first
                 # keyless one in the list.
-                is_active = _is_provider_active(prov, config, force_fresh=True)
+                is_active = _is_provider_active(prov, config, force_fresh=False)
                 if is_active and active_provider is None:
                     active_provider = prov["name"]
                 providers.append({

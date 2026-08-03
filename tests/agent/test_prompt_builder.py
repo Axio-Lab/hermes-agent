@@ -1547,3 +1547,17 @@ class TestParallelToolCallGuidance:
 # =========================================================================
 
 
+
+def test_build_verxio_active_media_status_reads_config(monkeypatch, tmp_path):
+    from agent.prompt_builder import build_verxio_active_media_status
+
+    cfg = {
+        "image_gen": {"provider": "openai", "model": "gpt-image-2-medium"},
+        "video_gen": {"provider": "dashscope", "model": "happyhorse-1.1"},
+    }
+    monkeypatch.setattr("hermes_cli.config.load_config", lambda: cfg)
+    text = build_verxio_active_media_status()
+    assert "provider=openai" in text
+    assert "gpt-image-2-medium" in text
+    assert "provider=dashscope" in text
+    assert "happyhorse-1.1" in text
