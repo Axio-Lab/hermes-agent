@@ -4845,6 +4845,101 @@ def test_interrupt_clears_multiple_own_pending():
             server._answers.pop(key, None)
 
 
+def test_interrupt_during_agent_init_does_not_wait_or_timeout(monkeypatch):
+    """Stop while the lazy AIAgent is still building must return immediately.
+
+    Using _sess() here would await agent_ready (up to init timeout) and surface
+    "agent initialization timed out" on cancel — the bug Verxio hit when the
+    user stopped a brand-new turn that was still waking the agent.
+    """
+    ready = threading.Event()  # deliberately never set
+    sess = _session()
+    sess["agent"] = None  # still constructing — no AIAgent yet
+    sess["agent_ready"] = ready
+    sess["agent_build_started"] = True
+    sess["running"] = True
+    sess["submit_token"] = object()
+    sess["inflight_turn"] = {"user": "hello", "assistant": "", "streaming": True}
+    server._sessions["sid"] = sess
+
+    builds = {"n": 0}
+    monkeypatch.setattr(
+        server, "_start_agent_build", lambda *a, **k: builds.__setitem__("n", builds["n"] + 1)
+    )
+
+    try:
+        started = time.monotonic()
+        resp = server.handle_request(
+            {"id": "1", "method": "session.interrupt", "params": {"session_id": "sid"}}
+        )
+        elapsed = time.monotonic() - started
+
+        assert resp.get("result", {}).get("status") == "interrupted", resp
+        assert elapsed < 1.0, f"interrupt blocked on agent init for {elapsed:.2f}s"
+        assert builds["n"] == 0, "interrupt must not kick off/await agent build"
+        assert sess["running"] is False
+        assert sess["submit_token"] is None
+        assert sess["inflight_turn"] is None
+    finally:
+        server._sessions.pop("sid", None)
+
+
+def test_agent_init_timeout_respects_env(monkeypatch):
+    monkeypatch.setenv("HERMES_AGENT_INIT_TIMEOUT", "12.5")
+    assert server._agent_init_timeout_seconds() == 12.5
+    monkeypatch.setenv("HERMES_AGENT_INIT_TIMEOUT", "nope")
+    assert server._agent_init_timeout_seconds(default=90.0) == 90.0
+    monkeypatch.delenv("HERMES_AGENT_INIT_TIMEOUT", raising=False)
+    assert server._agent_init_timeout_seconds(default=90.0) == 90.0
+
+
+def test_prompt_submit_returns_before_slow_db_row(monkeypatch):
+    """prompt.submit must ACK streaming even when DB row work is slow.
+
+    Cold starts used to run `_ensure_session_db_row` on the RPC thread; when
+    that blocked past the web client's gateway timeout, users saw
+    ``request timed out: prompt.submit`` despite a healthy turn.
+    """
+    ready = threading.Event()
+    sess = _session()
+    sess["agent"] = None
+    sess["agent_ready"] = ready
+    sess["agent_build_started"] = True
+    server._sessions["sid"] = sess
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_db_row(_session):
+        started.set()
+        release.wait(timeout=5)
+
+    monkeypatch.setattr(server, "_ensure_session_db_row", slow_db_row)
+    monkeypatch.setattr(server, "_start_agent_build", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_run_prompt_submit", lambda *a, **k: None)
+
+    try:
+        t0 = time.monotonic()
+        resp = server.handle_request(
+            {
+                "id": "1",
+                "method": "prompt.submit",
+                "params": {"session_id": "sid", "text": "hello"},
+            }
+        )
+        elapsed = time.monotonic() - t0
+
+        assert resp.get("result", {}).get("status") == "streaming", resp
+        assert elapsed < 1.0, f"prompt.submit blocked for {elapsed:.2f}s"
+        assert started.wait(timeout=1.0), "db row work should still run in background"
+    finally:
+        release.set()
+        ready.set()
+        # Let the background wait thread observe cancel/ready and exit.
+        time.sleep(0.05)
+        server._sessions.pop("sid", None)
+
+
 def test_clear_pending_without_sid_clears_all():
     """_clear_pending(None) is the shutdown path — must still release
     every pending prompt regardless of owning session."""

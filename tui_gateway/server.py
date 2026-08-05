@@ -969,9 +969,26 @@ def dispatch(req: dict, transport: Optional[Transport] = None) -> dict | None:
         reset_transport(token)
 
 
-def _wait_agent(session: dict, rid: str, timeout: float = 30.0) -> dict | None:
+def _agent_init_timeout_seconds(default: float = 90.0) -> float:
+    """Bound how long prompt.submit waits for a lazy AIAgent build.
+
+    Cold starts (tool registry + model resolve + MCP join) routinely exceed
+    30s after a runtime restart. Override with HERMES_AGENT_INIT_TIMEOUT.
+    """
+    raw = os.environ.get("HERMES_AGENT_INIT_TIMEOUT", "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _wait_agent(session: dict, rid: str, timeout: Optional[float] = None) -> dict | None:
     ready = session.get("agent_ready")
-    if ready is not None and not ready.wait(timeout=timeout):
+    wait_s = _agent_init_timeout_seconds() if timeout is None else timeout
+    if ready is not None and not ready.wait(timeout=wait_s):
         return _err(rid, 5032, "agent initialization timed out")
     err = session.get("agent_error")
     return _err(rid, 5032, err) if err else None
@@ -6445,11 +6462,31 @@ def _(rid, params: dict) -> dict:
 
 @method("session.interrupt")
 def _(rid, params: dict) -> dict:
-    session, err = _sess(params, rid)
+    # Must NOT go through _sess(): that waits for lazy AIAgent construction
+    # (up to HERMES_AGENT_INIT_TIMEOUT). Cancel during "starting…" would then
+    # block on the same init it's trying to abort and surface
+    # "agent initialization timed out" instead of stopping the turn.
+    session, err = _sess_nowait(params, rid)
     if err:
         return err
-    if hasattr(session["agent"], "interrupt"):
-        session["agent"].interrupt()
+
+    agent = session.get("agent")
+    if agent is not None and hasattr(agent, "interrupt"):
+        agent.interrupt()
+
+    # Invalidate any prompt.submit still waiting on agent_ready, and settle
+    # busy/running UI even when the agent has not finished building yet.
+    lock = session.get("history_lock")
+    if lock is not None:
+        with lock:
+            session["submit_token"] = None
+            session["running"] = False
+            _clear_inflight_turn(session)
+    else:
+        session["submit_token"] = None
+        session["running"] = False
+        _clear_inflight_turn(session)
+
     # Scope the pending-prompt release to THIS session.  A global
     # _clear_pending() would collaterally cancel clarify/sudo/secret
     # prompts on unrelated sessions sharing the same tui_gateway
@@ -6773,17 +6810,39 @@ def _(rid, params: dict) -> dict:
                 for handle in fish_handles
             )
             effective_text = f"{handle_notes}\n\n{effective_text}"
+        submit_token = object()
+        session["submit_token"] = submit_token
         session["running"] = True
         session["last_active"] = time.time()
         _start_inflight_turn(session, effective_text)
 
-    # Persist the DB row lazily, now that the user has actually sent a message.
-    _ensure_session_db_row(session)
+    # Kick the lazy AIAgent build, then return streaming immediately.
+    # DB row persistence and the ready-wait must NOT run on the RPC thread —
+    # under cold start `_ensure_session_db_row` / model resolve can exceed the
+    # web client's gateway request timeout and surface as
+    # "request timed out: prompt.submit" even though the turn would succeed.
     _start_agent_build(sid, session)
 
     def run_after_agent_ready() -> None:
+        # Persist the DB row lazily on the worker, now that the user sent a message.
+        try:
+            _ensure_session_db_row(session)
+        except Exception as exc:
+            print(
+                f"[tui_gateway] prompt.submit: ensure_session_db_row failed: {exc}",
+                file=sys.stderr,
+            )
+        # Stop during lazy init (or a newer submit) invalidates submit_token.
+        if session.get("submit_token") is not submit_token:
+            return
         err = _wait_agent(session, rid)
         if err:
+            with session["history_lock"]:
+                # Only the still-current submit owns the error/busy clear.
+                if session.get("submit_token") is not submit_token:
+                    return
+                session["running"] = False
+                _clear_inflight_turn(session)
             _emit(
                 "error",
                 sid,
@@ -6793,10 +6852,10 @@ def _(rid, params: dict) -> dict:
                     )
                 },
             )
-            with session["history_lock"]:
-                session["running"] = False
-                _clear_inflight_turn(session)
             return
+        with session["history_lock"]:
+            if session.get("submit_token") is not submit_token:
+                return
         _run_prompt_submit(rid, sid, session, effective_text)
 
     threading.Thread(target=run_after_agent_ready, daemon=True).start()
