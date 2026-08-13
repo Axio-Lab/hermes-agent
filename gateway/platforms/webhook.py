@@ -993,15 +993,7 @@ class WebhookAdapter(BasePlatformAdapter):
                 success=False, error=f"Unknown platform: {platform_name}"
             )
 
-        adapter = self.gateway_runner.adapters.get(target_platform)
-        if not adapter:
-            return SendResult(
-                success=False,
-                error=f"Platform {platform_name} not connected",
-            )
-
-        # Use home channel if no specific chat_id in deliver_extra
-        extra = delivery.get("deliver_extra", {})
+        extra = delivery.get("deliver_extra") or {}
         chat_id = extra.get("chat_id", "")
         if not chat_id:
             home = self.gateway_runner.config.get_home_channel(target_platform)
@@ -1012,6 +1004,19 @@ class WebhookAdapter(BasePlatformAdapter):
                     success=False,
                     error=f"No chat_id or home channel for {platform_name}",
                 )
+
+        conn_id = str(extra.get("connection_id") or "").strip()
+        adapter = None
+        if conn_id and conn_id != "default":
+            keyed = getattr(self.gateway_runner, "_connection_adapters", None) or {}
+            adapter = keyed.get(f"{target_platform.value}:{conn_id}")
+        if adapter is None:
+            adapter = self.gateway_runner.adapters.get(target_platform)
+        if not adapter:
+            return SendResult(
+                success=False,
+                error=f"Platform {platform_name} not connected",
+            )
 
         # Pass thread_id from deliver_extra so Telegram forum topics work
         metadata = None

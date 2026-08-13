@@ -1010,6 +1010,27 @@ class TestDeliverCrossPlatformThreadId:
         )
 
 
+    @pytest.mark.asyncio
+    async def test_connection_id_uses_connection_adapter(self):
+        adapter, mock_target = self._setup_adapter_with_mock_target()
+        extra_adapter = AsyncMock()
+        extra_adapter.send = AsyncMock(return_value=SendResult(success=True))
+        adapter.gateway_runner._connection_adapters = {
+            "telegram:conn_sales": extra_adapter
+        }
+        delivery = {
+            "deliver_extra": {
+                "chat_id": "12345",
+                "connection_id": "conn_sales",
+            }
+        }
+        await adapter._deliver_cross_platform("telegram", "hello", delivery)
+        extra_adapter.send.assert_awaited_once_with(
+            "12345", "hello", metadata=None
+        )
+        mock_target.send.assert_not_awaited()
+
+
 class TestInsecureNoAuthSafetyRail:
     """connect() refuses to start when INSECURE_NO_AUTH is combined with a
     non-loopback bind. Guards against accidentally exposing an unauthenticated

@@ -10232,6 +10232,7 @@ class WebhookCreate(BaseModel):
     deliver: str = "log"
     deliver_only: bool = False
     deliver_chat_id: Optional[str] = None
+    connection_id: Optional[str] = None
     # secret: omit to auto-generate
     secret: Optional[str] = None
 
@@ -10329,8 +10330,14 @@ async def create_webhook(body: WebhookCreate):
     }
     if body.deliver_only:
         route["deliver_only"] = True
+    extra: Dict[str, Any] = {}
     if body.deliver_chat_id:
-        route["deliver_extra"] = {"chat_id": body.deliver_chat_id}
+        extra["chat_id"] = body.deliver_chat_id
+    conn_id = (body.connection_id or "").strip()
+    if conn_id and conn_id != "default":
+        extra["connection_id"] = conn_id
+    if extra:
+        route["deliver_extra"] = extra
 
     subs = wh._load_subscriptions()
     subs[name] = route
