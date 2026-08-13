@@ -31,6 +31,10 @@ the SPA should bootstrap it after login instead.
 from __future__ import annotations
 
 PUBLIC_API_PATHS: frozenset[str] = frozenset({
+    # Tiny liveness probe. Must stay cheaper than /api/status so K8s and
+    # Verxio can tell the dashboard process is accepting HTTP even when
+    # status is still assembling gateway/session details.
+    "/api/healthz",
     # Liveness probe target. Returns version, gateway state, active
     # session count, and the dashboard auth-gate shape. No bodies, no
     # session content, no secrets. Documented as the portal's wildcard

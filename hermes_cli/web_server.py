@@ -170,31 +170,53 @@ def _resolve_restart_drain_timeout() -> float:
 
 
 def _count_active_sessions() -> int:
-    """Cheap session count for /api/status. Never rebuilds FTS or scans messages.
+    """Cheap session count for /api/status. Never imports hermes_state.
 
-    A write-mode SessionDB() on a large state.db can sit in schema/FTS init for
-    minutes on the asyncio event loop, which makes every probe (K8s/Verxio)
-    time out and wedges the whole dashboard.
+    SessionDB() pulls a huge module graph and can rebuild FTS on a large
+    state.db. That holds the GIL long enough that K8s/Verxio /api/status
+    probes time out and the dashboard stops answering HTTP at all.
     """
     try:
-        from hermes_state import DEFAULT_DB_PATH, SessionDB
+        import sqlite3
+
+        from hermes_constants import get_hermes_home
     except Exception:
         return 0
-    db_path = DEFAULT_DB_PATH
+    db_path = get_hermes_home() / "state.db"
     try:
         if not db_path.exists():
             return 0
-        db = SessionDB(db_path, read_only=True)
+        conn = sqlite3.connect(
+            f"file:{db_path}?mode=ro",
+            uri=True,
+            timeout=1.0,
+        )
         try:
-            row = db._conn.execute(
+            row = conn.execute(
                 "SELECT COUNT(*) FROM sessions "
                 "WHERE ended_at IS NULL AND IFNULL(archived, 0) = 0"
             ).fetchone()
             return int(row[0] if row else 0)
         finally:
-            db.close()
+            conn.close()
     except Exception:
         return 0
+
+
+def _configured_gateway_platforms() -> set[str] | None:
+    """Filter status platforms only if gateway.config is already imported.
+
+    Importing gateway.config on the first /api/status holds the GIL for a
+    long time on a cold dashboard and wedges every later probe.
+    """
+    module = sys.modules.get("gateway.config")
+    if module is None:
+        return None
+    try:
+        gateway_config = module.load_gateway_config()
+        return {platform.value for platform in gateway_config.get_connected_platforms()}
+    except Exception:
+        return None
 
 
 @asynccontextmanager
@@ -1901,6 +1923,12 @@ async def fs_default_cwd():
     return {"cwd": cwd, "branch": _fs_git_branch(cwd)}
 
 
+@app.get("/api/healthz")
+async def healthz():
+    """Process liveness for K8s/Verxio. No config, sqlite, or gateway imports."""
+    return {"ok": True}
+
+
 @app.get("/api/status")
 async def get_status(profile: Optional[str] = None):
     status_scope = None
@@ -1943,16 +1971,7 @@ async def get_status(profile: Optional[str] = None):
         gateway_platforms: dict = {}
         gateway_exit_reason = None
         gateway_updated_at = None
-        configured_gateway_platforms: set[str] | None = None
-        try:
-            from gateway.config import load_gateway_config
-
-            gateway_config = load_gateway_config()
-            configured_gateway_platforms = {
-                platform.value for platform in gateway_config.get_connected_platforms()
-            }
-        except Exception:
-            configured_gateway_platforms = None
+        configured_gateway_platforms = _configured_gateway_platforms()
 
         # Prefer the detailed health endpoint response (has full state) when the
         # local runtime status file is absent or stale (cross-container).
