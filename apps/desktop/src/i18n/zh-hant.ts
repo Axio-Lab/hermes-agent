@@ -918,7 +918,7 @@ export const zhHant = defineLocale({
     required: '必填',
     recommended: '建議',
     advanced: count => `進階 (${count})`,
-    noTokenNeeded: '此平台不需要在此填寫 Token。請按照上方設定指南操作，然後在下方啟用。',
+    noTokenNeeded: '此平台不需要在此填寫 Token。完成設定後，在下方啟用即可。',
     enabled: '已啟用',
     disabled: '已停用',
     unsavedChanges: '有未儲存的變更',

@@ -1785,15 +1785,24 @@ class TestWebServerEndpoints:
         assert weixin["name"] == "Weixin / WeChat (Personal)"
         assert "personal WeChat" in weixin["description"]
         assert "Official Account" not in f"{weixin['name']} {weixin['description']}"
-        assert weixin["docs_url"] == (
-            "https://hermes-agent.nousresearch.com/docs/user-guide/messaging/weixin/"
-        )
+        assert weixin["docs_url"] == ""
 
         fields = {field["key"]: field for field in weixin["env_vars"]}
         for key in ("WEIXIN_ACCOUNT_ID", "WEIXIN_TOKEN", "WEIXIN_BASE_URL"):
             assert "iLink" in fields[key]["description"]
             assert "QR login" in fields[key]["description"]
             assert "Official Account" not in fields[key]["description"]
+
+    def test_messaging_catalog_has_no_hermes_setup_guides(self):
+        resp = self.client.get("/api/messaging/platforms")
+
+        assert resp.status_code == 200
+        for platform in resp.json()["platforms"]:
+            docs = str(platform.get("docs_url") or "").lower()
+            assert "hermes-agent.nousresearch.com" not in docs, platform["id"]
+            for field in platform.get("env_vars") or []:
+                field_url = str(field.get("url") or "").lower()
+                assert "hermes-agent.nousresearch.com" not in field_url, field.get("key")
 
     def test_messaging_catalog_covers_gateway_platforms(self):
         """Catalog is derived from the Platform enum, so every built-in shows up."""
@@ -1806,6 +1815,17 @@ class TestWebServerEndpoints:
             if member.value == "local":
                 continue
             assert member.value in platforms, f"Missing gateway platform {member.value} from /api/messaging/platforms"
+
+    def test_api_server_requires_auth_key(self):
+        resp = self.client.get("/api/messaging/platforms")
+        api_server = next(
+            platform
+            for platform in resp.json()["platforms"]
+            if platform["id"] == "api_server"
+        )
+        fields = {field["key"]: field for field in api_server["env_vars"]}
+        assert api_server["docs_url"] == ""
+        assert fields["API_SERVER_KEY"]["required"] is True
 
     def test_messaging_catalog_includes_plugin_platforms(self, monkeypatch):
         """Plugin-registered adapters appear in the catalog without per-platform code."""

@@ -947,7 +947,7 @@ export const ja = defineLocale({
     recommended: '推奨',
     advanced: count => `詳細設定 (${count})`,
     noTokenNeeded:
-      'このプラットフォームはここでトークンが必要ありません。上のセットアップガイドを使用してから、以下で有効にしてください。',
+      'このプラットフォームはここでトークンが必要ありません。セットアップを終えてから、以下で有効にしてください。',
     enabled: '有効',
     disabled: '無効',
     unsavedChanges: '未保存の変更',

@@ -762,7 +762,7 @@ class APIServerAdapter(BasePlatformAdapter):
     def __init__(self, config: PlatformConfig):
         super().__init__(config, Platform.API_SERVER)
         extra = config.extra or {}
-        self._host: str = extra.get("host", os.getenv("API_SERVER_HOST", DEFAULT_HOST))
+        self._host: str = self._resolve_listen_host(extra.get("host"), os.getenv("API_SERVER_HOST"))
         raw_port = extra.get("port")
         if raw_port is None:
             raw_port = os.getenv("API_SERVER_PORT", str(DEFAULT_PORT))
@@ -816,6 +816,19 @@ class APIServerAdapter(BasePlatformAdapter):
             items = [str(value)]
 
         return tuple(str(item).strip() for item in items if str(item).strip())
+
+    @staticmethod
+    def _hosted_runtime() -> bool:
+        return os.getenv("VERXIO_HOSTED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+    @classmethod
+    def _resolve_listen_host(cls, extra_host: Any, env_host: str | None) -> str:
+        """Bind all interfaces in hosted Verxio so the control plane can proxy."""
+        for candidate in (extra_host, env_host):
+            host = str(candidate or "").strip()
+            if host:
+                return host
+        return "0.0.0.0" if cls._hosted_runtime() else DEFAULT_HOST
 
     @staticmethod
     def _resolve_max_concurrent_runs() -> int:

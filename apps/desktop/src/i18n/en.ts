@@ -826,7 +826,7 @@ export const en: Translations = {
     required: 'Required',
     recommended: 'Recommended',
     advanced: count => `Advanced (${count})`,
-    noTokenNeeded: 'This platform does not need a token here. Use the setup guide above, then enable it below.',
+    noTokenNeeded: 'This platform does not need a token here. Finish setup, then enable it below.',
     enabled: 'Enabled',
     disabled: 'Disabled',
     unsavedChanges: 'Unsaved changes',

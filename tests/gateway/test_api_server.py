@@ -264,6 +264,11 @@ class TestAdapterInit:
         assert adapter._api_key == ""
         assert adapter.platform == Platform.API_SERVER
 
+    def test_hosted_runtime_defaults_to_all_interfaces(self, monkeypatch):
+        monkeypatch.setenv("VERXIO_HOSTED", "1")
+        adapter = APIServerAdapter(PlatformConfig(enabled=True))
+        assert adapter._host == "0.0.0.0"
+
     def test_custom_config_from_extra(self):
         config = PlatformConfig(
             enabled=True,

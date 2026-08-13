@@ -4875,7 +4875,7 @@ _PLATFORM_OVERRIDES: dict[str, dict[str, Any]] = {
             "Official Meta WhatsApp Business API. Add credentials below, expose the "
             "webhook port publicly, then point Meta at your callback URL."
         ),
-        "docs_url": "https://hermes-agent.nousresearch.com/docs/user-guide/messaging/whatsapp-cloud",
+        "docs_url": "https://developers.facebook.com/docs/whatsapp/cloud-api/get-started",
         "env_vars": (
             "WHATSAPP_CLOUD_PHONE_NUMBER_ID",
             "WHATSAPP_CLOUD_ACCESS_TOKEN",
@@ -4911,7 +4911,7 @@ _PLATFORM_OVERRIDES: dict[str, dict[str, Any]] = {
     "email": {
         "name": "Email",
         "description": "Talk to Verxio through an IMAP/SMTP mailbox.",
-        "docs_url": "https://hermes-agent.nousresearch.com/docs/user-guide/messaging/",
+        "docs_url": "",
         "env_vars": (
             "EMAIL_ADDRESS",
             "EMAIL_PASSWORD",
@@ -4978,7 +4978,7 @@ _PLATFORM_OVERRIDES: dict[str, dict[str, Any]] = {
     "weixin": {
         "name": "Weixin / WeChat (Personal)",
         "description": "Connect a personal WeChat account through Tencent's iLink Bot API.",
-        "docs_url": "https://hermes-agent.nousresearch.com/docs/user-guide/messaging/weixin/",
+        "docs_url": "",
         "env_vars": ("WEIXIN_ACCOUNT_ID", "WEIXIN_TOKEN", "WEIXIN_BASE_URL"),
         "required_env": ("WEIXIN_ACCOUNT_ID", "WEIXIN_TOKEN"),
     },
@@ -5009,7 +5009,7 @@ _PLATFORM_OVERRIDES: dict[str, dict[str, Any]] = {
     "api_server": {
         "name": "API server",
         "description": "Expose Verxio as an OpenAI-compatible HTTP API for tools like Open WebUI.",
-        "docs_url": "https://hermes-agent.nousresearch.com/docs/user-guide/messaging/",
+        "docs_url": "",
         "env_vars": (
             "API_SERVER_ENABLED",
             "API_SERVER_KEY",
@@ -5017,12 +5017,12 @@ _PLATFORM_OVERRIDES: dict[str, dict[str, Any]] = {
             "API_SERVER_HOST",
             "API_SERVER_MODEL_NAME",
         ),
-        "required_env": (),
+        "required_env": ("API_SERVER_KEY",),
     },
     "webhook": {
         "name": "Webhooks",
         "description": "Receive events from GitHub, GitLab, and other webhook sources.",
-        "docs_url": "https://hermes-agent.nousresearch.com/docs/user-guide/messaging/webhooks/",
+        "docs_url": "",
         "env_vars": ("WEBHOOK_ENABLED", "WEBHOOK_PORT", "WEBHOOK_SECRET"),
         "required_env": (),
     },
@@ -5454,7 +5454,7 @@ def _build_catalog_entry(
         "id": platform_id,
         "name": name,
         "description": description or "",
-        "docs_url": override.get("docs_url", ""),
+        "docs_url": _sanitize_messaging_docs_url(override.get("docs_url", "")),
         "env_vars": env_vars,
         "required_env": required_env,
     }
@@ -5467,13 +5467,24 @@ def _catalog_lookup(platform_id: str) -> dict[str, Any] | None:
     return None
 
 
+def _sanitize_messaging_docs_url(url: Any) -> str:
+    """Drop Hermes/Nous setup-guide links from the messaging UI."""
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    lowered = raw.lower()
+    if "hermes-agent.nousresearch.com" in lowered:
+        return ""
+    return raw
+
+
 def _messaging_env_info(key: str) -> dict[str, Any]:
     info = OPTIONAL_ENV_VARS.get(key) or _MESSAGING_ENV_FALLBACKS.get(key) or {}
     return {
         "description": info.get("description", ""),
         "prompt": info.get("prompt", key),
         "help": info.get("help", ""),
-        "url": info.get("url"),
+        "url": _sanitize_messaging_docs_url(info.get("url")) or None,
         "is_password": info.get("password", False),
         "advanced": info.get("advanced", False),
     }
@@ -5636,7 +5647,7 @@ def _messaging_platform_payload(
         "id": platform_id,
         "name": entry["name"],
         "description": description,
-        "docs_url": entry["docs_url"],
+        "docs_url": _sanitize_messaging_docs_url(entry.get("docs_url")),
         "enabled": enabled,
         "configured": configured,
         "gateway_running": gateway_running,

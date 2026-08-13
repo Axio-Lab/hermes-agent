@@ -1015,7 +1015,7 @@ export const zh: Translations = {
     required: '必填',
     recommended: '推荐',
     advanced: count => `高级 (${count})`,
-    noTokenNeeded: '此平台无需在此填写令牌。请按上方设置指南操作，然后在下方启用。',
+    noTokenNeeded: '此平台无需在此填写令牌。完成设置后，在下方启用即可。',
     enabled: '已启用',
     disabled: '已禁用',
     unsavedChanges: '有未保存的更改',
