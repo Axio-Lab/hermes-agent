@@ -154,12 +154,47 @@ def _warm_gateway_module() -> None:
 
 
 def _resolve_restart_drain_timeout() -> float:
+    # Do not import hermes_cli.gateway here. That module graph holds the GIL
+    # for a long time on a cold start and wedges /api/status (K8s probes).
     try:
-        from hermes_cli.gateway import _get_restart_drain_timeout
-        return _get_restart_drain_timeout()
-    except ImportError:
-        from gateway.restart import DEFAULT_GATEWAY_RESTART_DRAIN_TIMEOUT
-        return DEFAULT_GATEWAY_RESTART_DRAIN_TIMEOUT
+        from gateway.restart import (
+            DEFAULT_GATEWAY_RESTART_DRAIN_TIMEOUT,
+            parse_restart_drain_timeout,
+        )
+        raw = os.environ.get("HERMES_RESTART_DRAIN_TIMEOUT")
+        if raw is not None and str(raw).strip():
+            return parse_restart_drain_timeout(raw)
+        return float(DEFAULT_GATEWAY_RESTART_DRAIN_TIMEOUT)
+    except Exception:
+        return 30.0
+
+
+def _count_active_sessions() -> int:
+    """Cheap session count for /api/status. Never rebuilds FTS or scans messages.
+
+    A write-mode SessionDB() on a large state.db can sit in schema/FTS init for
+    minutes on the asyncio event loop, which makes every probe (K8s/Verxio)
+    time out and wedges the whole dashboard.
+    """
+    try:
+        from hermes_state import DEFAULT_DB_PATH, SessionDB
+    except Exception:
+        return 0
+    db_path = DEFAULT_DB_PATH
+    try:
+        if not db_path.exists():
+            return 0
+        db = SessionDB(db_path, read_only=True)
+        try:
+            row = db._conn.execute(
+                "SELECT COUNT(*) FROM sessions "
+                "WHERE ended_at IS NULL AND IFNULL(archived, 0) = 0"
+            ).fetchone()
+            return int(row[0] if row else 0)
+        finally:
+            db.close()
+    except Exception:
+        return 0
 
 
 @asynccontextmanager
@@ -172,13 +207,9 @@ async def _lifespan(app: "FastAPI"):
     # event loop during lifespan startup — see _get_event_state's docstring.
     app.state.chat_argv_lock = asyncio.Lock()
 
-    # Fire hermes_cli.gateway import into a background thread so the event
-    # loop is not blocked and HERMES_DASHBOARD_READY fires without delay.
-    # On a cold Windows install the module chain triggers .pyc compilation
-    # and Defender real-time scans that can stall the event loop for 15-30s.
-    # Running in an executor means the cost is paid in a worker thread while
-    # the server socket is already open and accepting probes.
-    asyncio.get_event_loop().run_in_executor(None, _warm_gateway_module)
+    # Do not warm-import hermes_cli.gateway here. The import holds the GIL
+    # long enough that K8s/Verxio liveness probes time out even though the
+    # socket is bound. Drain timeout on /api/status uses gateway.restart.
 
     # Desktop-spawned backends (HERMES_DESKTOP=1) fire cron jobs themselves,
     # since the app has no gateway running the scheduler. Server `hermes
@@ -1966,22 +1997,9 @@ async def get_status(profile: Optional[str] = None):
         if gateway_running and gateway_state is None and remote_health_body is not None:
             gateway_state = "running"
 
-        active_sessions = 0
-        try:
-            from hermes_state import SessionDB
-            db = SessionDB()
-            try:
-                sessions = db.list_sessions_rich(limit=50)
-                now = time.time()
-                active_sessions = sum(
-                    1 for s in sessions
-                    if s.get("ended_at") is None
-                    and (now - s.get("last_active", s.get("started_at", 0))) < 300
-                )
-            finally:
-                db.close()
-        except Exception:
-            pass
+        active_sessions = await asyncio.get_running_loop().run_in_executor(
+            None, _count_active_sessions
+        )
 
         # Busy/drainable readout (NAS lifecycle-safety gate).  active_agents is
         # the in-flight gateway-turn count the gateway now persists at every

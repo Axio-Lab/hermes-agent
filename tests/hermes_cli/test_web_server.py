@@ -262,6 +262,21 @@ class TestWebServerEndpoints:
         assert "active_sessions" in data
         assert data["can_update_hermes"] is True
 
+    def test_get_status_counts_sessions_read_only(self, monkeypatch):
+        from hermes_state import SessionDB
+
+        opened_read_only: list[bool] = []
+        real_init = SessionDB.__init__
+
+        def tracking_init(self, db_path=None, read_only=False):
+            opened_read_only.append(read_only)
+            return real_init(self, db_path=db_path, read_only=read_only)
+
+        monkeypatch.setattr(SessionDB, "__init__", tracking_init)
+        resp = self.client.get("/api/status")
+        assert resp.status_code == 200
+        assert all(opened_read_only)
+
     def test_get_status_hides_update_capability_in_managed_runtime(self, monkeypatch):
         import hermes_cli.web_server as web_server
 
