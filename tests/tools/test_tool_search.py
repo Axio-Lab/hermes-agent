@@ -231,6 +231,70 @@ class TestRetrieval:
         hits = search_catalog(self._fake_catalog(), "github", limit=1)
         assert len(hits) <= 1
 
+    def _youcam_catalog(self):
+        from tools.tool_search import CatalogEntry, _tokenize, _entry_search_text
+        defs = [
+            (
+                _td(
+                    "mcp_YouCam_Beauty_AI_Skin_Analysis",
+                    "Evaluates skin concerns like wrinkles, pores, acne, oiliness",
+                    {"src_file_id": {"type": "string"}},
+                ),
+                "mcp-YouCam Beauty",
+            ),
+            (
+                _td(
+                    "mcp_YouCam_Beauty_upload_file",
+                    "Upload a file for a YouCam task",
+                    {"task_type": {"type": "string"}, "files": {"type": "array"}},
+                ),
+                "mcp-YouCam Beauty",
+            ),
+            (
+                _td(
+                    "mcp_YouCam_Beauty_list_prompts",
+                    "List available prompts from MCP server 'YouCam Beauty'",
+                ),
+                "mcp-YouCam Beauty",
+            ),
+            (
+                _td("github_create_issue", "Open a new issue in a GitHub repository"),
+                "mcp-github",
+            ),
+        ]
+        catalog = []
+        for d, source_name in defs:
+            fn = d["function"]
+            e = CatalogEntry(
+                name=fn["name"], description=fn["description"],
+                schema=d, source="mcp", source_name=source_name,
+            )
+            e._tokens = _tokenize(_entry_search_text(d, source_name))
+            catalog.append(e)
+        return catalog
+
+    def test_search_fuzzy_typo_finds_mcp_by_server_name(self):
+        """A one-letter typo of a connected MCP name must still retrieve it."""
+        from tools.tool_search import search_catalog
+        hits = search_catalog(self._youcam_catalog(), "youcamp", limit=5)
+        names = [h.name for h in hits]
+        assert any("YouCam" in n for n in names), names
+        assert "github_create_issue" not in names
+        assert names[0] != "mcp_YouCam_Beauty_list_prompts"
+
+
+class TestBridgeMcpLabels:
+    def test_tool_search_description_lists_mcp_servers(self):
+        from tools.tool_search import bridge_tool_schemas, TOOL_SEARCH_NAME
+        schemas = bridge_tool_schemas(
+            10, mcp_labels=["YouCam Beauty", "YouCam Creators"],
+        )
+        search = next(s for s in schemas if s["function"]["name"] == TOOL_SEARCH_NAME)
+        desc = search["function"]["description"]
+        assert "YouCam Beauty" in desc
+        assert "YouCam Creators" in desc
+        assert "misspell" in desc.lower()
+
 
 # ---------------------------------------------------------------------------
 # Assembly — the full passthrough/activate decision.

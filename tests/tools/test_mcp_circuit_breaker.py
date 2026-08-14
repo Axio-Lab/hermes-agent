@@ -174,6 +174,45 @@ def test_composio_multi_execute_string_tools_does_not_trip_breaker(monkeypatch, 
         _cleanup(mcp_tool, "composio")
 
 
+def test_application_tool_error_does_not_trip_breaker(monkeypatch, tmp_path):
+    """Validation errors from a live MCP RPC must not mark the server down.
+
+    Bad arguments / unknown enum values are application errors. Tripping
+    the breaker after three of those made a connected server look
+    unreachable for 60s, for any MCP — not just one product.
+    """
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    from tools import mcp_tool
+    from tools.mcp_tool import _make_tool_handler
+
+    call_count = {"n": 0}
+
+    async def _call_tool_unknown_task(*a, **kw):
+        call_count["n"] += 1
+        result = MagicMock()
+        result.isError = True
+        block = MagicMock()
+        block.text = "Unknown task type: 'face_analysis'"
+        result.content = [block]
+        result.structuredContent = None
+        return result
+
+    _install_stub_server(mcp_tool, "Acme Photos", _call_tool_unknown_task)
+    mcp_tool._ensure_mcp_loop()
+
+    try:
+        handler = _make_tool_handler("Acme Photos", "upload_file", 10.0)
+        for _ in range(5):
+            parsed = json.loads(handler({"task_type": "face_analysis"}))
+            assert "Unknown task type" in parsed["error"]
+            assert "unreachable" not in parsed["error"].lower()
+        assert call_count["n"] == 5
+        assert mcp_tool._server_error_counts.get("Acme Photos", 0) == 0
+    finally:
+        _cleanup(mcp_tool, "Acme Photos")
+
+
 def test_circuit_breaker_reopens_on_probe_failure(monkeypatch, tmp_path):
     """If the half-open probe fails, the breaker must re-arm the
     cooldown (not let every subsequent call through).

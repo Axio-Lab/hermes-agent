@@ -44,6 +44,7 @@ from agent.prompt_builder import (
     TOOL_USE_ENFORCEMENT_MODELS,
     VERXIO_CREDENTIAL_GUIDANCE,
     drain_truncation_warnings,
+    tool_search_mcp_guidance,
 )
 from agent.runtime_cwd import resolve_context_cwd
 
@@ -211,6 +212,20 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # agent has tools. Static text → byte-stable prompt (no cache hit).
     if agent.valid_tool_names:
         stable_parts.append(STEER_CHANNEL_NOTE)
+
+    # When MCP tools are deferred behind tool_search, name the connected
+    # servers so a nearby misspelling still routes to the matching MCP.
+    if "tool_search" in (agent.valid_tool_names or []):
+        try:
+            from hermes_cli.config import load_config as _load_mcp_cfg
+            from hermes_cli.tools_config import enabled_mcp_server_names
+
+            _mcp_names = sorted(enabled_mcp_server_names(_load_mcp_cfg() or {}))
+            _mcp_guide = tool_search_mcp_guidance(_mcp_names)
+            if _mcp_guide:
+                stable_parts.append(_mcp_guide)
+        except Exception:
+            pass
 
     # Computer-use — goes in as its own block rather than being merged into
     # tool_guidance because the content is multi-paragraph. The guidance is

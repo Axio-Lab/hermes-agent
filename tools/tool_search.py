@@ -279,6 +279,11 @@ class CatalogEntry:
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 
+# Query tokens this long may fuzzy-match catalog tokens (typos of MCP names).
+_FUZZY_MIN_LEN = 5
+_FUZZY_DIST1_MIN_LEN = 5
+_FUZZY_DIST2_MIN_LEN = 8
+
 
 def _tokenize(text: str) -> List[str]:
     if not text:
@@ -286,13 +291,111 @@ def _tokenize(text: str) -> List[str]:
     return [t.lower() for t in _TOKEN_RE.findall(text)]
 
 
-def _entry_search_text(td: Dict[str, Any]) -> str:
+def _levenshtein(a: str, b: str, max_dist: int = 2) -> int:
+    """Edit distance with an early exit once ``max_dist`` is exceeded."""
+    if a == b:
+        return 0
+    la, lb = len(a), len(b)
+    if abs(la - lb) > max_dist:
+        return max_dist + 1
+    if la < lb:
+        a, b = b, a
+        la, lb = lb, la
+    prev = list(range(lb + 1))
+    for i, ca in enumerate(a, start=1):
+        curr = [i]
+        row_min = i
+        for j, cb in enumerate(b, start=1):
+            ins = curr[j - 1] + 1
+            delete = prev[j] + 1
+            sub = prev[j - 1] + (ca != cb)
+            val = min(ins, delete, sub)
+            curr.append(val)
+            if val < row_min:
+                row_min = val
+        if row_min > max_dist:
+            return max_dist + 1
+        prev = curr
+    return prev[-1]
+
+
+def _fuzzy_token_match(query_token: str, doc_token: str) -> bool:
+    """True when ``query_token`` is a likely typo or prefix of ``doc_token``.
+
+    Conservative on short tokens so random queries still return empty.
+    """
+    if not query_token or not doc_token:
+        return False
+    if query_token == doc_token:
+        return True
+    shorter, longer = (
+        (query_token, doc_token)
+        if len(query_token) <= len(doc_token)
+        else (doc_token, query_token)
+    )
+    if len(shorter) >= _FUZZY_MIN_LEN and longer.startswith(shorter):
+        return True
+    if (
+        min(len(query_token), len(doc_token)) >= _FUZZY_DIST1_MIN_LEN
+        and _levenshtein(query_token, doc_token, 1) <= 1
+    ):
+        return True
+    if (
+        min(len(query_token), len(doc_token)) >= _FUZZY_DIST2_MIN_LEN
+        and _levenshtein(query_token, doc_token, 2) <= 2
+    ):
+        return True
+    return False
+
+
+def _expand_query_tokens(query_tokens: List[str], catalog_tokens: set[str]) -> List[str]:
+    """Replace typo'd query tokens with the catalog tokens they likely mean."""
+    expanded: List[str] = []
+    seen: set[str] = set()
+    for q in query_tokens:
+        candidates = [q] if q in catalog_tokens else [
+            t for t in catalog_tokens if _fuzzy_token_match(q, t)
+        ] or [q]
+        for c in candidates:
+            if c not in seen:
+                seen.add(c)
+                expanded.append(c)
+    return expanded
+
+
+def _mcp_label(source_name: str) -> str:
+    """Human MCP server name from a registry toolset (``mcp-github``)."""
+    if source_name.startswith("mcp-"):
+        return source_name[4:]
+    return source_name
+
+
+def mcp_server_labels_from_defs(tool_defs: List[Dict[str, Any]]) -> List[str]:
+    """Unique connected MCP server display names represented in ``tool_defs``."""
+    labels: List[str] = []
+    seen: set[str] = set()
+    for td in tool_defs:
+        name = (td.get("function") or {}).get("name", "")
+        if not name:
+            continue
+        source, source_name = _classify_source(name)
+        if source != "mcp" or not source_name:
+            continue
+        label = _mcp_label(source_name)
+        if label and label not in seen:
+            seen.add(label)
+            labels.append(label)
+    return labels
+
+
+def _entry_search_text(td: Dict[str, Any], source_name: str = "") -> str:
     """Build the search-text blob for a deferrable tool.
 
     Includes the tool name (with underscores broken into words so BM25 can
-    match against query terms), the description, and the names of the
-    top-level parameters. Schema bodies are deliberately excluded —
-    indexing them adds noise without improving recall in our measurement.
+    match against query terms), the description, the MCP server / toolset
+    name, and the names of the top-level parameters. Schema bodies are
+    deliberately excluded — indexing them adds noise without improving
+    recall in our measurement.
     """
     fn = td.get("function") or {}
     name = fn.get("name", "")
@@ -301,7 +404,8 @@ def _entry_search_text(td: Dict[str, Any]) -> str:
     param_names = " ".join(params.keys())
     # Break snake_case and dotted names into words for BM25.
     name_words = name.replace("_", " ").replace(".", " ").replace("-", " ").replace(":", " ")
-    return f"{name_words} {desc} {param_names}"
+    source_words = (source_name or "").replace("_", " ").replace("-", " ")
+    return f"{name_words} {source_words} {desc} {param_names}"
 
 
 def _classify_source(name: str) -> Tuple[str, str]:
@@ -338,7 +442,7 @@ def build_catalog(tool_defs: List[Dict[str, Any]]) -> List[CatalogEntry]:
             schema=td,
             source=source,
             source_name=source_name,
-            _tokens=_tokenize(_entry_search_text(td)),
+            _tokens=_tokenize(_entry_search_text(td, source_name)),
         )
         catalog.append(entry)
     return catalog
@@ -375,20 +479,36 @@ def _bm25_score(query_tokens: List[str], doc_tokens: List[str],
     return score
 
 
+_MCP_META_MARKERS = (
+    "list_prompts", "list_resources", "read_resource", "get_prompt",
+)
+
+
+def _meta_penalty(entry: CatalogEntry) -> float:
+    """Push MCP bookkeeping tools below the product tools users actually want."""
+    name = entry.name.lower()
+    if any(marker in name for marker in _MCP_META_MARKERS):
+        return -3.0
+    return 0.0
+
+
 def search_catalog(catalog: List[CatalogEntry], query: str, limit: int = 5) -> List[CatalogEntry]:
     """Return the top-``limit`` catalog entries for ``query`` by BM25.
 
-    Falls back to a stable name-substring match when BM25 yields no hits
-    above zero. That ensures a query like ``"github"`` against a catalog
-    where every tool is named ``github_*`` still returns results — BM25
-    can underperform when query and document share only one token that
-    appears in every document (zero IDF).
+    Query tokens that look like typos of catalog tokens are expanded
+    before scoring. Falls back to a stable name/source substring or
+    fuzzy-token match when BM25 yields no hits.
     """
     if not catalog or limit <= 0:
         return []
     query_tokens = _tokenize(query)
     if not query_tokens:
         return []
+
+    catalog_tokens: set[str] = set()
+    for e in catalog:
+        catalog_tokens.update(e._tokens)
+    scored_tokens = _expand_query_tokens(query_tokens, catalog_tokens)
 
     # Precompute doc statistics.
     doc_lengths = [len(e._tokens) for e in catalog]
@@ -402,16 +522,25 @@ def search_catalog(catalog: List[CatalogEntry], query: str, limit: int = 5) -> L
 
     scored: List[Tuple[float, CatalogEntry]] = []
     for entry in catalog:
-        s = _bm25_score(query_tokens, entry._tokens, doc_lengths, avg_dl,
+        s = _bm25_score(scored_tokens, entry._tokens, doc_lengths, avg_dl,
                         doc_freq, n_docs)
+        s += _meta_penalty(entry)
         if s > 0:
             scored.append((s, entry))
 
     if not scored:
-        # Substring fallback against the original tool name.
         ql = query.lower()
         for entry in catalog:
-            if ql in entry.name.lower():
+            name_l = entry.name.lower()
+            source_l = (entry.source_name or "").lower()
+            if ql in name_l or ql in source_l:
+                scored.append((0.1, entry))
+                continue
+            if any(
+                _fuzzy_token_match(q, t)
+                for q in query_tokens
+                for t in set(entry._tokens)
+            ):
                 scored.append((0.1, entry))
 
     scored.sort(key=lambda x: x[0], reverse=True)
@@ -423,19 +552,33 @@ def search_catalog(catalog: List[CatalogEntry], query: str, limit: int = 5) -> L
 # ---------------------------------------------------------------------------
 
 
-def bridge_tool_schemas(deferred_count: int) -> List[Dict[str, Any]]:
+def bridge_tool_schemas(
+    deferred_count: int,
+    mcp_labels: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
     """Build the bridge tool schemas to inject in place of deferred tools.
 
     The schemas are intentionally short — every byte added here is a byte
     the user pays on every turn. Descriptions are tuned to be unambiguous
-    about the call sequence the model should follow.
+    about the call sequence the model should follow. MCP server names are
+    listed so a small model that would otherwise skip search still knows
+    those products are connected, even when the user misspells the name.
     """
+    mcp_clause = ""
+    if mcp_labels:
+        listed = ", ".join(mcp_labels)
+        mcp_clause = (
+            f" Connected MCP servers (search even if the user misspells them): "
+            f"{listed}."
+        )
     desc_search = (
         f"Search {deferred_count} additional tools that are loaded on demand. "
         "Returns up to ``limit`` matches with name and description. Follow "
         f"with `{TOOL_DESCRIBE_NAME}` to load a tool's full parameter schema, "
-        f"then `{TOOL_CALL_NAME}` to invoke it. Tools listed at the top of this "
-        "system prompt are already available and do not need to be searched."
+        f"then `{TOOL_CALL_NAME}` to invoke it.{mcp_clause} "
+        "When the user names a product or MCP, search before claiming it is "
+        "unavailable. Tools listed at the top of this system prompt are "
+        "already available and do not need to be searched."
     )
     desc_describe = (
         f"Load the full JSON schema for one tool returned by `{TOOL_SEARCH_NAME}`. "
@@ -565,7 +708,10 @@ def assemble_tool_defs(
             threshold_tokens=int((context_length or 0) * (config.threshold_pct / 100.0)),
         )
 
-    bridge = bridge_tool_schemas(len(deferrable))
+    bridge = bridge_tool_schemas(
+        len(deferrable),
+        mcp_labels=mcp_server_labels_from_defs(deferrable),
+    )
     result = visible + bridge
     threshold_tokens = int((context_length or 0) * (config.threshold_pct / 100.0))
 
@@ -725,6 +871,7 @@ __all__ = [
     "should_activate",
     "build_catalog",
     "search_catalog",
+    "mcp_server_labels_from_defs",
     "bridge_tool_schemas",
     "assemble_tool_defs",
     "is_bridge_tool",

@@ -455,6 +455,32 @@ GOOGLE_MODEL_OPERATIONAL_GUIDANCE = (
 )
 
 
+def tool_search_mcp_guidance(server_names: list[str]) -> str:
+    """Prompt block listing MCP servers hidden behind tool_search.
+
+    Small models otherwise treat a misspelled product name as "not
+    connected" and skip search entirely. Keep this short — it is in the
+    cached system prompt for every turn while tool_search is active.
+    Names come from whatever MCP servers the user enabled; nothing here
+    is product-specific.
+    """
+    names = [str(n).strip() for n in server_names if str(n).strip()]
+    if not names:
+        return ""
+    listed = ", ".join(names)
+    return (
+        "# Deferred MCP servers\n"
+        "These MCP servers are connected. Their tools are available via "
+        f"`tool_search` / `tool_describe` / `tool_call`: {listed}. When the "
+        "user names a product, integration, or MCP — including nearby "
+        "misspellings of these names — search then call the matching tool. "
+        "Do not claim an MCP is disconnected until tool_search returns no "
+        "matches. Application errors (bad arguments, unknown enum values) "
+        "mean the server answered; correct the arguments from the tool "
+        "schema and continue. Only transport failures mean a server is down."
+    )
+
+
 # Guidance injected into the system prompt when the computer_use toolset
 # is active. Universal — works for any model (Claude, GPT, open models).
 # Built per-platform via computer_use_guidance() so Windows/Linux hosts

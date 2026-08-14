@@ -2420,6 +2420,24 @@ _servers: Dict[str, MCPServerTask] = {}
 _server_connecting: set[str] = set()
 _server_connect_errors: Dict[str, str] = {}
 
+_TRANSPORTISH_ERROR_RE = re.compile(
+    r"(timeout|timed out|502|503|504|bad gateway|connection "
+    r"(reset|refused|aborted|closed)|unreachable|not connected|"
+    r"name or service not known|temporarily unavailable)",
+    re.I,
+)
+
+
+def _error_is_transport_failure(error_text: str) -> bool:
+    """True when an MCP error JSON describes a dead transport, not bad args.
+
+    Application-level failures (Unknown task type, missing arguments) must
+    not trip the circuit breaker — the server answered. Transport/gateway
+    failures still do, so a genuinely down server short-circuits retries.
+    """
+    return bool(_TRANSPORTISH_ERROR_RE.search(error_text or ""))
+
+
 # Circuit breaker: consecutive error counts per server.  After
 # _CIRCUIT_BREAKER_THRESHOLD consecutive failures, the handler returns
 # a "server unreachable" message that tells the model to stop retrying,
@@ -3270,13 +3288,16 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
 
         try:
             result = _call_once()
-            # Check if the MCP tool itself returned an error
+            # RPC completed. Application-level tool errors (bad args,
+            # Unknown task type) mean the server is reachable — do not
+            # trip the breaker. Transport-ish error text still counts.
             try:
                 parsed = json.loads(result)
-                if "error" in parsed:
+                err_text = str(parsed.get("error") or "")
+                if err_text and _error_is_transport_failure(err_text):
                     _bump_server_error(server_name)
                 else:
-                    _reset_server_error(server_name)  # success — reset
+                    _reset_server_error(server_name)
             except (json.JSONDecodeError, TypeError):
                 _reset_server_error(server_name)  # non-JSON = success
             return result

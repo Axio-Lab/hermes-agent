@@ -96,3 +96,33 @@ class TestCodingContextBlock:
         monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
         agent = _make_agent(valid_tool_names=[], platform="cli")
         assert "coding agent" not in _stable_prompt(agent)
+
+
+class TestDeferredMcpGuidance:
+    def test_injected_when_tool_search_and_mcp_servers(self):
+        agent = _make_agent(
+            valid_tool_names=["tool_search", "read_file"],
+            platform="telegram",
+        )
+        with patch(
+            "hermes_cli.tools_config.enabled_mcp_server_names",
+            return_value={"YouCam Beauty", "composio"},
+        ), patch(
+            "hermes_cli.config.load_config",
+            return_value={"mcp_servers": {}},
+        ):
+            stable = _stable_prompt(agent)
+        assert "Deferred MCP servers" in stable
+        assert "YouCam Beauty" in stable
+        assert "composio" in stable
+        assert "AI-Skin-Analysis" not in stable
+        assert "youcamp" not in stable
+
+    def test_absent_without_tool_search(self):
+        agent = _make_agent(valid_tool_names=["read_file"], platform="telegram")
+        with patch(
+            "hermes_cli.tools_config.enabled_mcp_server_names",
+            return_value={"YouCam Beauty"},
+        ):
+            stable = _stable_prompt(agent)
+        assert "Deferred MCP servers" not in stable
