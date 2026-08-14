@@ -5724,6 +5724,24 @@ def load_config() -> Dict[str, Any]:
     return _load_config_impl(want_deepcopy=True)
 
 
+def config_for_editor() -> Dict[str, Any]:
+    """Return ``load_config()`` with on-disk ``${VAR}`` templates restored.
+
+    Runtime code needs expanded secrets. Settings → MCP must keep
+    ``Bearer ${YOUCAM_API_KEY}`` so Tools & Keys stays the source of truth
+    and GET ``/api/config`` does not send plaintext keys to the browser.
+    """
+    expanded = load_config()
+    raw = read_raw_config()
+    if not raw:
+        return expanded
+    return _preserve_env_ref_templates(
+        expanded,
+        raw,
+        _LAST_EXPANDED_CONFIG_BY_PATH.get(str(get_config_path())),
+    )
+
+
 def load_config_readonly() -> Dict[str, Any]:
     """Fast-path variant of ``load_config()`` for callers that ONLY READ.
 

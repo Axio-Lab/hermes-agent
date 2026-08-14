@@ -2926,6 +2926,29 @@ class TestConfigRoundTrip:
         assert isinstance(config.get("model"), str), \
             f"model should be string, got {type(config.get('model'))}"
 
+    def test_get_config_keeps_mcp_env_templates(self, monkeypatch, _isolate_hermes_home):
+        """MCP headers must stay ${VAR} refs, not expanded Tools & Keys secrets."""
+        from hermes_cli.config import save_config
+
+        monkeypatch.setenv("YOUCAM_API_KEY", "sk-test-should-not-appear-in-api")
+        save_config({
+            "mcp_servers": {
+                "YouCam Beauty": {
+                    "url": "https://example.test/mcp/beauty",
+                    "headers": {"Authorization": "Bearer ${YOUCAM_API_KEY}"},
+                }
+            }
+        })
+
+        config = self.client.get("/api/config").json()
+        auth = (
+            ((config.get("mcp_servers") or {}).get("YouCam Beauty") or {})
+            .get("headers", {})
+            .get("Authorization")
+        )
+        assert auth == "Bearer ${YOUCAM_API_KEY}"
+        assert "sk-test-should-not-appear-in-api" not in json.dumps(config)
+
     def test_round_trip_preserves_model_subkeys(self):
         """Save and reload should not lose model.provider, model.base_url, etc."""
         from hermes_cli.config import load_config, save_config
