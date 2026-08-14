@@ -33,6 +33,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import re
 import subprocess
 import time
@@ -149,6 +150,31 @@ class WebhookAdapter(BasePlatformAdapter):
             config.extra.get("max_body_bytes", 1_048_576)
         )  # 1MB
 
+    @staticmethod
+    def _route_webhook_connection_id(route: dict) -> str:
+        raw = str(route.get("webhook_connection_id") or "").strip()
+        return raw or "default"
+
+    def _connection_secret(self, connection_id: str) -> str:
+        try:
+            from gateway.connections import connection_env_key, is_default_connection
+
+            scoped = (os.getenv(connection_env_key("WEBHOOK_SECRET", connection_id), "") or "").strip()
+            if scoped:
+                return scoped
+            if is_default_connection(connection_id):
+                return self._global_secret
+        except Exception:
+            if not connection_id or connection_id == "default":
+                return self._global_secret
+        return ""
+
+    def _effective_secret(self, route: dict) -> str:
+        if "secret" in route:
+            # Empty string is explicit and invalid — do not fall back.
+            return str(route.get("secret") or "").strip()
+        return self._connection_secret(self._route_webhook_connection_id(route)) or self._global_secret
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -159,7 +185,7 @@ class WebhookAdapter(BasePlatformAdapter):
 
         # Validate routes at startup — secret is required per route
         for name, route in self._routes.items():
-            secret = route.get("secret", self._global_secret)
+            secret = self._effective_secret(route)
             if not secret:
                 raise ValueError(
                     f"[webhook] Route '{name}' has no HMAC secret. "
@@ -194,6 +220,9 @@ class WebhookAdapter(BasePlatformAdapter):
         app = web.Application()
         app.router.add_get("/health", self._handle_health)
         app.router.add_post("/webhooks/{route_name}", self._handle_webhook)
+        app.router.add_post(
+            "/c/{connection_id}/webhooks/{route_name}", self._handle_webhook
+        )
         # Multi-profile multiplexing: a /p/<profile>/webhooks/<route> prefix
         # routes the inbound event to that profile. Same handler; the profile is
         # captured from the path and stamped onto the SessionSource so the agent
@@ -201,6 +230,10 @@ class WebhookAdapter(BasePlatformAdapter):
         # when gateway.multiplex_profiles is on (the handler validates).
         app.router.add_post(
             "/p/{profile}/webhooks/{route_name}", self._handle_webhook
+        )
+        app.router.add_post(
+            "/p/{profile}/c/{connection_id}/webhooks/{route_name}",
+            self._handle_webhook,
         )
 
         # Port conflict detection — fail fast if port is already in use
@@ -377,7 +410,7 @@ class WebhookAdapter(BasePlatformAdapter):
             for k, v in data.items():
                 if k in self._static_routes:
                     continue
-                effective_secret = v.get("secret", self._global_secret)
+                effective_secret = self._effective_secret(v)
                 if not effective_secret:
                     logger.warning(
                         "[webhook] Dynamic route '%s' skipped: 'secret' is "
@@ -446,6 +479,7 @@ class WebhookAdapter(BasePlatformAdapter):
 
         route_name = request.match_info.get("route_name", "")
         route_config = self._routes.get(route_name)
+        inbound_connection_id = (request.match_info.get("connection_id") or "").strip()
 
         # Multi-profile: resolve + validate the /p/<profile>/ prefix if present.
         profile = self._resolve_request_profile(request)
@@ -455,6 +489,17 @@ class WebhookAdapter(BasePlatformAdapter):
             )
 
         if not route_config:
+            return web.json_response(
+                {"error": f"Unknown route: {route_name}"}, status=404
+            )
+
+        route_connection_id = self._route_webhook_connection_id(route_config)
+        if inbound_connection_id:
+            if route_connection_id != inbound_connection_id:
+                return web.json_response(
+                    {"error": f"Unknown route: {route_name}"}, status=404
+                )
+        elif route_connection_id not in ("", "default"):
             return web.json_response(
                 {"error": f"Unknown route: {route_name}"}, status=404
             )
@@ -487,7 +532,7 @@ class WebhookAdapter(BasePlatformAdapter):
         # INSECURE_NO_AUTH mode). Missing/empty secrets must fail closed here,
         # not only during connect(), so direct handler reuse cannot turn a
         # network webhook route into an unauthenticated agent-dispatch surface.
-        secret = route_config.get("secret", self._global_secret)
+        secret = self._effective_secret(route_config)
         if not secret:
             logger.error(
                 "[webhook] Route %s has no HMAC secret; refusing request",

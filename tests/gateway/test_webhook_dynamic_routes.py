@@ -172,3 +172,16 @@ class TestDynamicRouteSecretValidation:
         adapter._reload_dynamic_routes()
         assert "good" in adapter._routes
         assert "bad" not in adapter._routes
+
+
+class TestWebhookConnectionRoutes:
+    def test_route_connection_id_defaults_to_default(self):
+        adapter = _make_adapter()
+        assert adapter._route_webhook_connection_id({}) == "default"
+        assert adapter._route_webhook_connection_id({"webhook_connection_id": "sales"}) == "sales"
+
+    def test_effective_secret_uses_connection_env(self, monkeypatch):
+        monkeypatch.setenv("WEBHOOK_SECRET__CONN_SALES", "conn-secret")
+        adapter = _make_adapter(extra={"secret": "global-secret"})
+        assert adapter._effective_secret({"webhook_connection_id": "sales"}) == "conn-secret"
+        assert adapter._effective_secret({"secret": "route-secret", "webhook_connection_id": "sales"}) == "route-secret"

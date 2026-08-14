@@ -27,6 +27,18 @@ MULTI_ACCOUNT_PLATFORMS = frozenset(
         "discord",
         "whatsapp",
         "whatsapp_cloud",
+        "webhook",
+        "api_server",
+    }
+)
+
+# Multi-account platforms that multiplex inside one adapter (no extra bind/port).
+SHARED_ADAPTER_PLATFORMS = frozenset(
+    {
+        "slack",
+        "whatsapp_cloud",
+        "webhook",
+        "api_server",
     }
 )
 
@@ -37,6 +49,8 @@ PRIMARY_CREDENTIAL_ENV: Dict[str, str] = {
     "discord": "DISCORD_BOT_TOKEN",
     "whatsapp": "WHATSAPP_ENABLED",
     "whatsapp_cloud": "WHATSAPP_CLOUD_PHONE_NUMBER_ID",
+    "webhook": "WEBHOOK_SECRET",
+    "api_server": "API_SERVER_KEY",
 }
 
 # Per-connection credential keys scanned for ``__CONN_{id}`` orphans on rebuild.
@@ -49,6 +63,8 @@ CONNECTION_SCOPED_ENV_KEYS: Dict[str, tuple[str, ...]] = {
         "WHATSAPP_CLOUD_PHONE_NUMBER_ID",
         "WHATSAPP_CLOUD_ACCESS_TOKEN",
     ),
+    "webhook": ("WEBHOOK_SECRET",),
+    "api_server": ("API_SERVER_KEY",),
 }
 
 # Survives config.yaml wipes — labels are not secrets but must outlive rebuilds.
@@ -58,6 +74,8 @@ CONNECTION_LABEL_ENV: Dict[str, str] = {
     "discord": "DISCORD_CONNECTION_LABEL",
     "whatsapp": "WHATSAPP_CONNECTION_LABEL",
     "whatsapp_cloud": "WHATSAPP_CLOUD_CONNECTION_LABEL",
+    "webhook": "WEBHOOK_CONNECTION_LABEL",
+    "api_server": "API_SERVER_CONNECTION_LABEL",
 }
 
 # Env keys that are app-level (shared across connections) — not cloned per connection.
@@ -92,6 +110,15 @@ APP_LEVEL_ENV: Dict[str, frozenset[str]] = {
             "WHATSAPP_CLOUD_WEBHOOK_PATH",
             "WHATSAPP_CLOUD_API_VERSION",
             "WHATSAPP_CLOUD_WABA_ID",
+        }
+    ),
+    "webhook": frozenset({"WEBHOOK_ENABLED", "WEBHOOK_PORT"}),
+    "api_server": frozenset(
+        {
+            "API_SERVER_ENABLED",
+            "API_SERVER_PORT",
+            "API_SERVER_HOST",
+            "API_SERVER_MODEL_NAME",
         }
     ),
 }
@@ -377,12 +404,33 @@ def platform_has_recoverable_credentials(
             return True
         return bool(discover_connection_ids_from_env(platform_id, env))
 
+    if platform_id in {"webhook", "api_server"}:
+        enabled_env = "WEBHOOK_ENABLED" if platform_id == "webhook" else "API_SERVER_ENABLED"
+        if (env.get(enabled_env) or "").strip().lower() in {"true", "1", "yes"}:
+            return True
+        if _platform_enabled_in_config(platform_id):
+            return True
+
     primary = PRIMARY_CREDENTIAL_ENV.get(platform_id, "")
     if primary and primary != "WHATSAPP_ENABLED" and (env.get(primary) or "").strip():
         return True
     if discover_connection_ids_from_env(platform_id, env):
         return True
     return False
+
+
+def _platform_enabled_in_config(platform_id: str) -> bool:
+    try:
+        from hermes_cli.config import load_config
+
+        config = load_config()
+        platforms = config.get("platforms") if isinstance(config, dict) else None
+        if not isinstance(platforms, dict):
+            return False
+        entry = platforms.get(platform_id)
+        return isinstance(entry, dict) and bool(entry.get("enabled"))
+    except Exception:
+        return False
 
 
 def _connection_primary_token(
@@ -728,6 +776,9 @@ def recover_connections_for_platform(
     primary = PRIMARY_CREDENTIAL_ENV.get(platform_id, "")
     if platform_id == "whatsapp":
         legacy_set = any(path.is_file() for path in _whatsapp_default_creds_paths())
+    elif platform_id in {"webhook", "api_server"}:
+        # Shared listener: once the platform is recoverable, always keep Default.
+        legacy_set = True
     else:
         legacy_set = bool((env.get(primary) or "").strip()) if primary else False
 

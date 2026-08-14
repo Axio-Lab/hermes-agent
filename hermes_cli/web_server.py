@@ -5711,7 +5711,15 @@ def _multi_account_platform_ids() -> frozenset[str]:
         return MULTI_ACCOUNT_PLATFORMS
     except Exception:
         return frozenset(
-            {"slack", "telegram", "discord", "whatsapp", "whatsapp_cloud"}
+            {
+                "slack",
+                "telegram",
+                "discord",
+                "whatsapp",
+                "whatsapp_cloud",
+                "webhook",
+                "api_server",
+            }
         )
 
 
@@ -5811,6 +5819,9 @@ def _messaging_connections_payload(
         )
         if platform_id == "whatsapp":
             configured = _whatsapp_is_paired(record.id)
+        elif platform_id == "webhook" and record.id == DEFAULT_CONNECTION_ID:
+            # Default webhook identity is the shared listener; routes carry secrets.
+            configured = True
 
         out.append(
             {
@@ -6728,6 +6739,7 @@ async def create_messaging_connection(
     entry = _require_multi_account_platform(platform_id)
     from gateway.connections import (
         DEFAULT_CONNECTION_ID,
+        PRIMARY_CREDENTIAL_ENV,
         ConnectionRecord,
         connection_credential_keys,
         connection_env_key,
@@ -6749,6 +6761,13 @@ async def create_messaging_connection(
                 for row in (payload.get("connections") or [])
                 if isinstance(row, dict)
             ]
+        if platform_id in {"webhook", "api_server"} and not any(
+            r.id == DEFAULT_CONNECTION_ID for r in records
+        ):
+            records = [
+                ConnectionRecord(id=DEFAULT_CONNECTION_ID, label="Default", enabled=True),
+                *records,
+            ]
 
         conn_id = new_connection_id(platform_id[:4] if platform_id else "conn")
         label = (body.label or f"Connection {len(records) + 1}").strip()
@@ -6762,6 +6781,7 @@ async def create_messaging_connection(
         catalog_keys = [str(v) for v in entry.get("env_vars") or ()]
         cred_keys = set(connection_credential_keys(platform_id, catalog_keys))
         allowed_env = set(entry["env_vars"])
+        created_secret = ""
 
         for key, value in body.env.items():
             if key not in allowed_env:
@@ -6787,6 +6807,16 @@ async def create_messaging_connection(
             else:
                 save_env_value(connection_env_key(key, conn_id), trimmed)
 
+        if platform_id in {"webhook", "api_server"}:
+            primary = PRIMARY_CREDENTIAL_ENV.get(platform_id, "")
+            storage_key = connection_env_key(primary, conn_id) if primary else ""
+            existing = (load_env().get(storage_key) or "").strip() if storage_key else ""
+            if primary and not existing:
+                import secrets as _secrets
+
+                created_secret = _secrets.token_urlsafe(32)
+                save_env_value(storage_key, created_secret)
+
         records.append(record)
         save_connections_for_platform(platform_id, records)
         try:
@@ -6795,7 +6825,10 @@ async def create_messaging_connection(
             persist_connection_label(platform_id, record.id, record.label)
         except Exception:
             pass
-        return {"ok": True, "platform": platform_id, "connection": record.to_dict()}
+        payload = record.to_dict()
+        if created_secret:
+            payload["secret"] = created_secret
+        return {"ok": True, "platform": platform_id, "connection": payload}
 
 
 @app.put("/api/messaging/platforms/{platform_id}/connections/{connection_id}")
@@ -10281,11 +10314,18 @@ class WebhookCreate(BaseModel):
     deliver_only: bool = False
     deliver_chat_id: Optional[str] = None
     connection_id: Optional[str] = None
+    webhook_connection_id: Optional[str] = None
     # secret: omit to auto-generate
     secret: Optional[str] = None
 
 
 def _webhook_route_summary(name: str, route: Dict[str, Any], base_url: str) -> Dict[str, Any]:
+    conn_id = str(route.get("webhook_connection_id") or "default").strip() or "default"
+    if conn_id != "default":
+        url = f"{base_url}/c/{conn_id}/webhooks/{name}"
+    else:
+        url = f"{base_url}/webhooks/{name}"
+    extra = route.get("deliver_extra") if isinstance(route.get("deliver_extra"), dict) else {}
     return {
         "name": name,
         "description": route.get("description", ""),
@@ -10295,7 +10335,9 @@ def _webhook_route_summary(name: str, route: Dict[str, Any], base_url: str) -> D
         "prompt": route.get("prompt", ""),
         "skills": list(route.get("skills") or []),
         "created_at": route.get("created_at"),
-        "url": f"{base_url}/webhooks/{name}",
+        "url": url,
+        "webhook_connection_id": conn_id,
+        "deliver_connection_id": str(extra.get("connection_id") or "") or None,
         # Secret is masked on read; full value only returned on create.
         "secret_set": bool(route.get("secret")),
         # Default-enabled; only an explicit enabled:false turns a route off.
@@ -10366,7 +10408,16 @@ async def create_webhook(body: WebhookCreate):
             detail="Direct delivery requires a real target (telegram, discord, …), not 'log'.",
         )
 
-    secret = body.secret or _secrets.token_urlsafe(32)
+    webhook_conn = (body.webhook_connection_id or "").strip()
+    if webhook_conn == "default":
+        webhook_conn = ""
+    secret = (body.secret or "").strip()
+    if not secret and webhook_conn:
+        from gateway.connections import connection_env_key
+
+        secret = (load_env().get(connection_env_key("WEBHOOK_SECRET", webhook_conn)) or "").strip()
+    if not secret:
+        secret = _secrets.token_urlsafe(32)
     route: Dict[str, Any] = {
         "description": body.description or f"Dashboard-created subscription: {name}",
         "events": [e.strip() for e in body.events if e.strip()],
@@ -10376,6 +10427,8 @@ async def create_webhook(body: WebhookCreate):
         "deliver": body.deliver or "log",
         "created_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
     }
+    if webhook_conn:
+        route["webhook_connection_id"] = webhook_conn
     if body.deliver_only:
         route["deliver_only"] = True
     extra: Dict[str, Any] = {}

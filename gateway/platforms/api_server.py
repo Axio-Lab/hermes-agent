@@ -802,6 +802,37 @@ class APIServerAdapter(BasePlatformAdapter):
         # (the /v1/runs path tracks its own in-flight set via _run_streams).
         self._inflight_agent_runs: int = 0
 
+    def _configured_api_keys(self) -> list[tuple[str, str]]:
+        """Return ``(key, connection_id)`` pairs this listener accepts."""
+        found: list[tuple[str, str]] = []
+        seen: set[str] = set()
+
+        def _add(key: str, connection_id: str) -> None:
+            trimmed = (key or "").strip()
+            if not trimmed or trimmed in seen:
+                return
+            seen.add(trimmed)
+            found.append((trimmed, connection_id))
+
+        _add(self._api_key, "default")
+        try:
+            from gateway.connections import connection_env_key, load_connections_for_platform
+
+            for record in load_connections_for_platform("api_server"):
+                if not record.enabled:
+                    continue
+                scoped = os.getenv(connection_env_key("API_SERVER_KEY", record.id), "") or ""
+                if not scoped.strip() and record.id == "default":
+                    scoped = self._api_key
+                _add(scoped, record.id)
+        except Exception:
+            prefix = "API_SERVER_KEY__CONN_"
+            for env_key, value in os.environ.items():
+                if not env_key.startswith(prefix) or not (value or "").strip():
+                    continue
+                _add(value, env_key[len(prefix):].lower())
+        return found
+
     @staticmethod
     def _parse_cors_origins(value: Any) -> tuple[str, ...]:
         """Normalize configured CORS origins into a stable tuple."""
@@ -967,15 +998,18 @@ class APIServerAdapter(BasePlatformAdapter):
         Returns None if auth is OK, or a 401 web.Response on failure.
         connect() refuses to start the API server without API_SERVER_KEY, so
         the no-key branch only exists for tests or unsupported manual wiring.
+        Extra connections add more valid Bearer tokens on the same listener.
         """
-        if not self._api_key:
+        keys = self._configured_api_keys()
+        if not keys:
             return None
 
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
             token = auth_header[7:].strip()
-            if hmac.compare_digest(token, self._api_key):
-                return None  # Auth OK
+            for key, _connection_id in keys:
+                if len(token) == len(key) and hmac.compare_digest(token, key):
+                    return None
 
         logger.warning(
             "API server rejected invalid API key: %s",

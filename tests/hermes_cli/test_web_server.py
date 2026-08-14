@@ -1846,6 +1846,13 @@ class TestWebServerEndpoints:
         fields = {field["key"]: field for field in api_server["env_vars"]}
         assert api_server["docs_url"] == ""
         assert fields["API_SERVER_KEY"]["required"] is True
+        assert api_server["supports_multiple_connections"] is True
+
+    def test_webhook_and_api_server_support_multiple_connections(self):
+        resp = self.client.get("/api/messaging/platforms")
+        by_id = {platform["id"]: platform for platform in resp.json()["platforms"]}
+        assert by_id["webhook"]["supports_multiple_connections"] is True
+        assert by_id["api_server"]["supports_multiple_connections"] is True
 
     def test_messaging_catalog_includes_plugin_platforms(self, monkeypatch):
         """Plugin-registered adapters appear in the catalog without per-platform code."""

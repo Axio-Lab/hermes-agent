@@ -191,3 +191,42 @@ def test_persist_and_read_connection_label(tmp_path, monkeypatch):
     env_text = (tmp_path / ".env").read_text(encoding="utf-8")
     assert "TELEGRAM_CONNECTION_LABEL__CONN_TELE_F4F2E55F=AI Pundit" in env_text
     assert read_connection_label("telegram", "tele_f4f2e55f") == "AI Pundit"
+
+
+def test_webhook_and_api_server_are_shared_multi_account():
+    from gateway.connections import (
+        MULTI_ACCOUNT_PLATFORMS,
+        PRIMARY_CREDENTIAL_ENV,
+        SHARED_ADAPTER_PLATFORMS,
+        connection_env_key,
+    )
+
+    assert "webhook" in MULTI_ACCOUNT_PLATFORMS
+    assert "api_server" in MULTI_ACCOUNT_PLATFORMS
+    assert "webhook" in SHARED_ADAPTER_PLATFORMS
+    assert "api_server" in SHARED_ADAPTER_PLATFORMS
+    assert PRIMARY_CREDENTIAL_ENV["webhook"] == "WEBHOOK_SECRET"
+    assert PRIMARY_CREDENTIAL_ENV["api_server"] == "API_SERVER_KEY"
+    assert connection_env_key("WEBHOOK_SECRET", "sales") == "WEBHOOK_SECRET__CONN_SALES"
+    assert connection_env_key("API_SERVER_KEY", "ops") == "API_SERVER_KEY__CONN_OPS"
+
+
+def test_webhook_recover_keeps_default_when_enabled(tmp_path, monkeypatch):
+    from gateway.connections import DEFAULT_CONNECTION_ID, recover_connections_for_platform
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / "config.yaml").write_text(
+        "\n".join(
+            [
+                "platforms:",
+                "  webhook:",
+                "    enabled: true",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    records, _ = recover_connections_for_platform(
+        "webhook", {"WEBHOOK_ENABLED": "true"}, persist=True
+    )
+    assert [r.id for r in records] == [DEFAULT_CONNECTION_ID]

@@ -7403,6 +7403,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             DEFAULT_CONNECTION_ID,
             MULTI_ACCOUNT_PLATFORMS,
             PRIMARY_CREDENTIAL_ENV,
+            SHARED_ADAPTER_PLATFORMS,
             connection_env_key,
             connections_from_platform_dict,
         )
@@ -7410,9 +7411,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         platform_id = platform.value
         if platform_id not in MULTI_ACCOUNT_PLATFORMS:
             return
-        if platform_id in {"slack", "whatsapp_cloud"}:
-            # Slack multiplexes workspaces inside one adapter.
-            # WhatsApp Cloud shares one webhook and routes by phone_number_id.
+        if platform_id in SHARED_ADAPTER_PLATFORMS:
+            # Slack / WhatsApp Cloud / webhook / API server multiplex inside
+            # one adapter (shared bind, scoped tokens or routes).
             return
 
         try:

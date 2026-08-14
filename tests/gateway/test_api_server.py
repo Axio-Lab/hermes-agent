@@ -424,6 +424,26 @@ class TestAuth:
         assert result is not None
         assert result.status == 401
 
+    def test_extra_connection_key_passes(self, monkeypatch):
+        config = PlatformConfig(enabled=True, extra={"key": "sk-default-key"})
+        adapter = APIServerAdapter(config)
+
+        class _Record:
+            id = "sales"
+            enabled = True
+
+        monkeypatch.setenv("API_SERVER_KEY__CONN_SALES", "sk-sales-key-xx")
+        monkeypatch.setattr(
+            "gateway.connections.load_connections_for_platform",
+            lambda *_args, **_kwargs: [_Record()],
+        )
+        mock_request = MagicMock()
+        mock_request.headers = {"Authorization": "Bearer sk-sales-key-xx"}
+        assert adapter._check_auth(mock_request) is None
+
+        mock_request.headers = {"Authorization": "Bearer sk-default-key"}
+        assert adapter._check_auth(mock_request) is None
+
 
 # ---------------------------------------------------------------------------
 # Concurrency cap (gateway.api_server.max_concurrent_runs) — #7483
