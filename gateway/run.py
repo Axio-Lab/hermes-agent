@@ -126,6 +126,16 @@ _GATEWAY_RATE_LIMIT_RE = re.compile(
     re.IGNORECASE,
 )
 
+_MISSING_PROVIDER_KEY_RE = re.compile(
+    r"("
+    r"no api key was found"
+    r"|set the [A-Z0-9_]*API_KEY"
+    r"|`hermes model`"
+    r"|hermes setup"
+    r")",
+    re.IGNORECASE,
+)
+
 _GATEWAY_SECRET_PATTERNS = (
     re.compile(r"\bsk-[A-Za-z0-9][A-Za-z0-9_\-]{12,}\b"),
     re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b"),
@@ -399,10 +409,17 @@ def _looks_like_gateway_provider_error(text: str) -> bool:
     return bool(_GATEWAY_PROVIDER_ERROR_SHAPE_RE.search(body))
 
 
-def _verxio_provider_error_reply(text: str) -> str:
-    """Plain-language provider errors for Verxio messaging surfaces."""
+def _verxio_rewrite_session_error(text: str) -> str | None:
+    """Replace CLI/provider internals with a Verxio-safe chat reply."""
+    if not text:
+        return None
     redacted = _redact_gateway_user_facing_secrets(str(text))
     lower = redacted.lower()
+    if _MISSING_PROVIDER_KEY_RE.search(redacted):
+        return (
+            "The selected model is missing an API key. "
+            "Open Verxio, pick a hosted model, or add a provider key in Tools & Keys, then try again."
+        )
     if (
         _GATEWAY_AUTH_ERROR_RE.search(redacted)
         or "403" in redacted
@@ -417,7 +434,15 @@ def _verxio_provider_error_reply(text: str) -> str:
         return "The model provider is rate-limiting requests. Give it a minute and try again."
     if _looks_like_gateway_provider_error(redacted):
         return "Something went wrong reaching the model provider. Try again in a moment."
-    return redacted
+    return None
+
+
+def _verxio_provider_error_reply(text: str) -> str:
+    """Plain-language provider errors for Verxio messaging surfaces."""
+    rewritten = _verxio_rewrite_session_error(text)
+    if rewritten:
+        return rewritten
+    return _redact_gateway_user_facing_secrets(str(text))
 
 
 def _sanitize_gateway_final_response(platform: Any, text: str) -> str:
@@ -432,8 +457,9 @@ def _sanitize_gateway_final_response(platform: Any, text: str) -> str:
 
     redacted = _redact_gateway_user_facing_secrets(str(text))
     if _verxio_hosted() and _verxio_messaging_platform(platform):
-        if _looks_like_gateway_provider_error(redacted):
-            return _verxio_provider_error_reply(redacted)
+        rewritten = _verxio_rewrite_session_error(redacted)
+        if rewritten:
+            return rewritten
         return redacted
 
     if _gateway_platform_value(platform) != "telegram":
@@ -2521,8 +2547,9 @@ def _normalize_empty_agent_response(
                     "This conversation got too long for the model. "
                     "Use /compact to shorten it, or /reset to start fresh."
                 )
-            if _looks_like_gateway_provider_error(str(error_detail)):
-                return _verxio_provider_error_reply(str(error_detail))
+            rewritten = _verxio_rewrite_session_error(str(error_detail))
+            if rewritten:
+                return rewritten
             return (
                 f"I couldn't finish that request: {str(error_detail)[:200]}. "
                 "Try again or use /reset to start fresh."
@@ -10633,6 +10660,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     )
                 elif status_code == 400:
                     status_hint = " The request was rejected by the API."
+            if _verxio_hosted():
+                rewritten = _verxio_rewrite_session_error(
+                    f"{error_detail}\n{status_hint}".strip()
+                )
+                if rewritten:
+                    return rewritten
             return (
                 f"Sorry, I encountered an error ({error_type}).\n"
                 f"{error_detail}\n"

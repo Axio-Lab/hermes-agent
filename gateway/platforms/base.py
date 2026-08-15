@@ -4881,14 +4881,24 @@ class BasePlatformAdapter(ABC):
             try:
                 error_type = type(e).__name__
                 error_detail = str(e)[:300] if str(e) else "no details available"
+                content = (
+                    f"Sorry, I encountered an error ({error_type}).\n"
+                    f"{error_detail}\n"
+                    "Try again or use /reset to start a fresh session."
+                )
+                try:
+                    from gateway.run import _verxio_hosted, _verxio_rewrite_session_error
+
+                    if _verxio_hosted():
+                        rewritten = _verxio_rewrite_session_error(error_detail)
+                        if rewritten:
+                            content = rewritten
+                except Exception:
+                    pass
                 _thread_metadata = _thread_metadata_for_source(event.source, _reply_anchor_for_event(event))
                 await self.send(
                     chat_id=event.source.chat_id,
-                    content=(
-                        f"Sorry, I encountered an error ({error_type}).\n"
-                        f"{error_detail}\n"
-                        "Try again or use /reset to start a fresh session."
-                    ),
+                    content=content,
                     metadata=_thread_metadata,
                 )
             except Exception:

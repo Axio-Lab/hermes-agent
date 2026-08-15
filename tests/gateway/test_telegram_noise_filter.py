@@ -81,3 +81,35 @@ def test_telegram_final_response_keeps_normal_answers():
     answer = "Here is the clean summary you asked for."
 
     assert _sanitize_gateway_final_response(Platform.TELEGRAM, answer) == answer
+
+
+def test_verxio_hosted_hides_missing_gemini_key_cli_error(monkeypatch):
+    monkeypatch.setenv("VERXIO_HOSTED", "1")
+    raw = (
+        "Sorry, I encountered an error (RuntimeError).\n"
+        "Provider 'gemini' is set in config.yaml but no API key was found. "
+        "Set the GOOGLE_API_KEY environment variable, or switch to a different "
+        "provider with `hermes model`. Try again or use /reset to start a fresh session."
+    )
+
+    sanitized = _sanitize_gateway_final_response("whatsapp", raw)
+
+    assert "Tools & Keys" in sanitized
+    assert "hermes model" not in sanitized
+    assert "GOOGLE_API_KEY" not in sanitized
+    assert "config.yaml" not in sanitized
+
+
+def test_verxio_rewrite_missing_provider_key_error(monkeypatch):
+    monkeypatch.setenv("VERXIO_HOSTED", "1")
+    from gateway.run import _verxio_rewrite_session_error
+
+    rewritten = _verxio_rewrite_session_error(
+        "Provider 'gemini' is set in config.yaml but no API key was found. "
+        "Set the GOOGLE_API_KEY environment variable, or switch to a different "
+        "provider with `hermes model`."
+    )
+
+    assert rewritten is not None
+    assert "Tools & Keys" in rewritten
+    assert "hermes model" not in rewritten
