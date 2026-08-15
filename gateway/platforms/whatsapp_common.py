@@ -405,6 +405,7 @@ def resolve_whatsapp_bridge_dir() -> Path:
 
     # Install dir is read-only, mirror to HERMES_HOME if needed
     if hermes_home_bridge.exists():
+        _sync_whatsapp_bridge_sources(install_bridge, hermes_home_bridge)
         return hermes_home_bridge
 
     # Mirror the bridge source to HERMES_HOME
@@ -418,3 +419,23 @@ def resolve_whatsapp_bridge_dir() -> Path:
         return hermes_home_bridge
     except Exception:
         return install_bridge
+
+
+_BRIDGE_SOURCE_FILES = ("bridge.js", "allowlist.js", "package.json")
+
+
+def _sync_whatsapp_bridge_sources(src: Path, dest: Path) -> None:
+    """Refresh mirrored bridge sources after an image roll; keep node_modules."""
+    dest.mkdir(parents=True, exist_ok=True)
+    for name in _BRIDGE_SOURCE_FILES:
+        src_file = src / name
+        dest_file = dest / name
+        if not src_file.is_file():
+            continue
+        try:
+            incoming = src_file.read_bytes()
+            if dest_file.is_file() and dest_file.read_bytes() == incoming:
+                continue
+            dest_file.write_bytes(incoming)
+        except OSError:
+            continue

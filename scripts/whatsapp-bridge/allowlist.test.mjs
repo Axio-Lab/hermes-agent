@@ -9,6 +9,7 @@ import {
   matchesAllowedUser,
   normalizeWhatsAppIdentifier,
   parseAllowedUsers,
+  whatsappNumbersMatch,
 } from './allowlist.js';
 
 test('normalizeWhatsAppIdentifier strips jid syntax and plus prefix', () => {
@@ -53,6 +54,24 @@ test('matchesAllowedUser treats * as allow-all wildcard', () => {
     const allowedUsers = parseAllowedUsers('*');
     assert.equal(matchesAllowedUser('19175395595@s.whatsapp.net', allowedUsers, sessionDir), true);
     assert.equal(matchesAllowedUser('267383306489914@lid', allowedUsers, sessionDir), true);
+  } finally {
+    rmSync(sessionDir, { recursive: true, force: true });
+  }
+});
+
+test('whatsappNumbersMatch treats local 0-prefix and country-code forms as the same number', () => {
+  assert.equal(whatsappNumbersMatch('07068827272', '2347068827272'), true);
+  assert.equal(whatsappNumbersMatch('2347068827272', '7068827272'), true);
+  assert.equal(whatsappNumbersMatch('19175395595', '18801276386'), false);
+});
+
+test('matchesAllowedUser accepts local 0-prefix allowlist against E.164 sender', () => {
+  const sessionDir = mkdtempSync(path.join(os.tmpdir(), 'hermes-wa-allowlist-'));
+
+  try {
+    const allowedUsers = parseAllowedUsers('07068827272');
+    assert.equal(matchesAllowedUser('2347068827272@s.whatsapp.net', allowedUsers, sessionDir), true);
+    assert.equal(matchesAllowedUser('19175395595@s.whatsapp.net', allowedUsers, sessionDir), false);
   } finally {
     rmSync(sessionDir, { recursive: true, force: true });
   }

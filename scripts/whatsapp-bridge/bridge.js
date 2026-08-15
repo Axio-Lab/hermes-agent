@@ -316,12 +316,13 @@ async function startSocket() {
       }
 
       // Handle !fromMe messages (from other people) based on mode.
-      // Self-chat mode only responds to the user's own messages to
-      // themselves — stranger DMs / group pings must never reach the
-      // Python gateway, otherwise a pairing-code reply fires in response
-      // to arbitrary incoming messages (#8389).
+      // Stranger DMs must never reach the Python gateway without an
+      // allowlist (#8389). Self-chat still accepts "Message yourself",
+      // and also allowlisted inbound DMs so Verxio behaves like Telegram.
       if (!msg.key.fromMe) {
-        if (WHATSAPP_MODE === 'self-chat') {
+        if (chatId.includes('status')) continue;
+        const allowlisted = matchesAllowedUser(senderId, ALLOWED_USERS, SESSION_DIR);
+        if (WHATSAPP_MODE === 'self-chat' && !allowlisted) {
           try {
             console.log(JSON.stringify({
               event: 'ignored',
@@ -332,7 +333,7 @@ async function startSocket() {
           } catch {}
           continue;
         }
-        if (!matchesAllowedUser(senderId, ALLOWED_USERS, SESSION_DIR)) {
+        if (WHATSAPP_MODE !== 'self-chat' && !allowlisted) {
           try {
             console.log(JSON.stringify({
               event: 'ignored',

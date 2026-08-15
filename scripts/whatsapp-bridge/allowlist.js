@@ -9,6 +9,20 @@ export function normalizeWhatsAppIdentifier(value) {
     .replace(/^\+/, '');
 }
 
+export function whatsappNumbersMatch(left, right) {
+  if (!left || !right) return false;
+  if (left === right) return true;
+  const stripLocalZero = (value) => (
+    value.startsWith('0') && value.length >= 10 ? value.slice(1) : value
+  );
+  const a = stripLocalZero(left);
+  const b = stripLocalZero(right);
+  if (a === b) return true;
+  const shorter = a.length <= b.length ? a : b;
+  const longer = a.length <= b.length ? b : a;
+  return shorter.length >= 8 && longer.endsWith(shorter);
+}
+
 export function parseAllowedUsers(rawValue) {
   return new Set(
     String(rawValue || '')
@@ -81,6 +95,11 @@ export function matchesAllowedUser(senderId, allowedUsers, sessionDir) {
   for (const alias of aliases) {
     if (allowedUsers.has(alias)) {
       return true;
+    }
+    for (const allowed of allowedUsers) {
+      if (allowed !== '*' && whatsappNumbersMatch(alias, allowed)) {
+        return true;
+      }
     }
   }
 

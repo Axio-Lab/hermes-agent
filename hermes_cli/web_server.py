@@ -6204,6 +6204,9 @@ async def apply_whatsapp_pairing(
         try:
             if body.allowed_users and body.allowed_users.strip():
                 save_env_value("WHATSAPP_ALLOWED_USERS", body.allowed_users.strip().replace(" ", ""))
+            from gateway.whatsapp_identity import ensure_paired_whatsapp_allowlist
+
+            ensure_paired_whatsapp_allowlist(persist=True)
             save_env_value("WHATSAPP_ENABLED", "true")
             _write_platform_enabled("whatsapp", True)
         except Exception:

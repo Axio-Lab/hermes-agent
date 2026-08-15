@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Set
@@ -54,6 +55,28 @@ def _whatsapp_session_dir() -> Path:
         return resolve_whatsapp_session_dir()
     except Exception:
         return Path(get_hermes_dir("platforms/whatsapp/session", "whatsapp/session"))
+
+
+def whatsapp_numbers_match(left: str, right: str) -> bool:
+    """True when two numeric WhatsApp IDs are the same person.
+
+    Operators often save a local form (``07068827272``) while Baileys
+    emits E.164 (``2347068827272``) or a LID that maps to E.164.
+    """
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+
+    def _strip_local_zero(value: str) -> str:
+        return value[1:] if value.startswith("0") and len(value) >= 10 else value
+
+    left_n = _strip_local_zero(left)
+    right_n = _strip_local_zero(right)
+    if left_n == right_n:
+        return True
+    shorter, longer = (left_n, right_n) if len(left_n) <= len(right_n) else (right_n, left_n)
+    return len(shorter) >= 8 and longer.endswith(shorter)
 
 
 def normalize_whatsapp_identifier(value: str) -> str:
@@ -215,3 +238,72 @@ def canonical_whatsapp_identifier(identifier: str) -> str:
     # when no lid-mapping files are present.
     aliases = expand_whatsapp_aliases(normalized)
     return min(aliases, key=lambda candidate: (len(candidate), candidate))
+
+
+def paired_whatsapp_identities(session_dir: Path | None = None) -> Set[str]:
+    """Return phone + LID identifiers for the account that scanned the QR."""
+    directory = Path(session_dir) if session_dir is not None else _whatsapp_session_dir()
+    creds_path = directory / "creds.json"
+    if not creds_path.is_file():
+        return set()
+    try:
+        payload = json.loads(creds_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.debug("whatsapp_identity: failed to read %s: %s", creds_path, exc)
+        return set()
+    me = payload.get("me") if isinstance(payload, dict) else None
+    if not isinstance(me, dict):
+        return set()
+
+    found: Set[str] = set()
+    for raw in (me.get("id"), me.get("lid"), me.get("jid")):
+        normalized = normalize_whatsapp_identifier(str(raw or ""))
+        if not normalized:
+            continue
+        found.add(normalized)
+        found.update(expand_whatsapp_aliases(normalized))
+    return {item for item in found if item}
+
+
+def merge_whatsapp_allowed_users(existing: str, extra: Set[str]) -> str:
+    """Merge paired identities into an allowlist without dropping operator entries."""
+    tokens = [part.strip() for part in str(existing or "").split(",") if part.strip()]
+    if "*" in tokens:
+        return "*"
+    have = {normalize_whatsapp_identifier(token) for token in tokens}
+    have.discard("")
+    merged = list(tokens)
+    for ident in sorted(extra):
+        normalized = normalize_whatsapp_identifier(ident)
+        if not normalized:
+            continue
+        if normalized in have or any(whatsapp_numbers_match(normalized, known) for known in have):
+            continue
+        merged.append(normalized)
+        have.add(normalized)
+    return ",".join(merged)
+
+
+def ensure_paired_whatsapp_allowlist(*, persist: bool = True) -> str:
+    """Make sure the paired WhatsApp account can message the agent.
+
+    Users type local numbers (``0706…``) or leave the allowlist empty after
+    QR pairing. Inbound DMs then arrive as E.164 or a LID and were dropped.
+    Always union the creds.json identity into ``WHATSAPP_ALLOWED_USERS``.
+    """
+    extra = paired_whatsapp_identities()
+    current = os.getenv("WHATSAPP_ALLOWED_USERS", "")
+    merged = merge_whatsapp_allowed_users(current, extra)
+    if not merged:
+        return current.strip()
+    changed = merged != current.strip().replace(" ", "")
+    if changed:
+        os.environ["WHATSAPP_ALLOWED_USERS"] = merged
+        if persist:
+            try:
+                from hermes_cli.config import save_env_value
+
+                save_env_value("WHATSAPP_ALLOWED_USERS", merged)
+            except Exception:
+                logger.debug("whatsapp_identity: could not persist allowlist", exc_info=True)
+    return merged

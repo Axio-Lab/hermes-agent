@@ -25,6 +25,7 @@ from gateway.session import SessionSource
 from gateway.whatsapp_identity import (
     expand_whatsapp_aliases as _expand_whatsapp_auth_aliases,
     normalize_whatsapp_identifier as _normalize_whatsapp_identifier,
+    whatsapp_numbers_match as _whatsapp_numbers_match,
 )
 
 
@@ -434,6 +435,13 @@ class GatewayAuthorizationMixin:
             normalized_user_id = _normalize_whatsapp_identifier(user_id)
             if normalized_user_id:
                 check_ids.add(normalized_user_id)
+            if check_ids & allowed_ids:
+                return True
+            for candidate in check_ids:
+                for allowed in allowed_ids:
+                    if allowed != "*" and _whatsapp_numbers_match(candidate, allowed):
+                        return True
+            return False
 
         # SimpleX: SIMPLEX_ALLOWED_USERS accepts either the numeric contactId
         # or the contact's display name. The adapter sets user_id=contactId for

@@ -549,6 +549,7 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                                 if running_hash and disk_hash and running_hash == disk_hash:
                                     print(f"[{self.name}] Using existing bridge (status: {bridge_status})")
                                     self._mark_connected()
+                                    self._seed_paired_allowlist()
                                     self._bridge_process = None  # Not managed by us
                                     self._http_session = aiohttp.ClientSession()
                                     self._poll_task = asyncio.create_task(self._poll_messages())
@@ -682,6 +683,7 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
             self._poll_task = asyncio.create_task(self._poll_messages())
             
             self._mark_connected()
+            self._seed_paired_allowlist()
             print(f"[{self.name}] Bridge started on port {self._bridge_port}")
             return True
             
@@ -694,6 +696,14 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                     self._release_platform_lock()
                 self._close_bridge_log()
     
+    def _seed_paired_allowlist(self) -> None:
+        try:
+            from gateway.whatsapp_identity import ensure_paired_whatsapp_allowlist
+
+            ensure_paired_whatsapp_allowlist(persist=True)
+        except Exception:
+            logger.debug("[%s] Could not seed paired WhatsApp allowlist", self.name, exc_info=True)
+
     def _close_bridge_log(self) -> None:
         """Close the bridge log file handle if open."""
         if self._bridge_log_fh:

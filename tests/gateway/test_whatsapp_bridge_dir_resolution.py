@@ -118,3 +118,44 @@ def test_readonly_install_reuses_existing_mirror(tmp_path, monkeypatch):
     assert resolved == mirror
     # Existing node_modules left intact (no destructive re-copy).
     assert (mirror / "node_modules" / "sentinel").read_text() == "keep me\n"
+
+
+def test_readonly_install_refreshes_stale_mirror_sources(tmp_path, monkeypatch):
+    """Image rolls must update mirrored bridge.js without wiping node_modules."""
+    install_root = tmp_path / "install"
+    install_bridge = install_root / "scripts" / "whatsapp-bridge"
+    _seed_install_tree(install_bridge)
+    (install_bridge / "bridge.js").write_text("// bridge v2\n")
+    (install_bridge / "allowlist.js").write_text("export const n = 2\n")
+
+    hermes_home = tmp_path / "hermes_home"
+    mirror = hermes_home / "scripts" / "whatsapp-bridge"
+    mirror.mkdir(parents=True)
+    (mirror / "bridge.js").write_text("// bridge v1\n")
+    (mirror / "allowlist.js").write_text("export const n = 1\n")
+    (mirror / "node_modules").mkdir()
+    (mirror / "node_modules" / "sentinel").write_text("keep me\n")
+
+    monkeypatch.setattr(
+        whatsapp_common, "__file__",
+        str(install_root / "gateway" / "platforms" / "whatsapp_common.py"),
+    )
+    monkeypatch.setattr(
+        "hermes_constants.get_hermes_home", lambda: hermes_home
+    )
+
+    _real_touch = Path.touch
+
+    def _fake_touch(self, *a, **kw):
+        if self.name == ".write_test" and install_bridge in self.parents:
+            raise PermissionError("read-only install tree")
+        return _real_touch(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "touch", _fake_touch)
+
+    resolved = whatsapp_common.resolve_whatsapp_bridge_dir()
+
+    assert resolved == mirror
+    assert (mirror / "bridge.js").read_text() == "// bridge v2\n"
+    assert (mirror / "allowlist.js").read_text() == "export const n = 2\n"
+    assert (mirror / "node_modules" / "sentinel").read_text() == "keep me\n"
