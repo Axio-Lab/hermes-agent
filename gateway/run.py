@@ -17624,10 +17624,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 _sc_msg_id = _sc.message_id
                 if _sc_msg_id:
                     try:
+                        from gateway.stream_consumer import GatewayStreamConsumer
                         await _sc.adapter.edit_message(
                             chat_id=source.chat_id,
                             message_id=_sc_msg_id,
-                            content=response["final_response"],
+                            content=GatewayStreamConsumer._clean_for_display(
+                                response["final_response"]
+                            ),
                             finalize=True,
                         )
                         response["already_sent"] = True

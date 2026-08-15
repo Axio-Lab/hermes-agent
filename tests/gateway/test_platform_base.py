@@ -471,6 +471,24 @@ class TestExtractMedia:
         assert media == []
         assert "MEDIA:" in cleaned  # preserved as text
 
+    def test_artifact_media_in_inline_code_is_extracted(self):
+        """Backticked MEDIA:/…/artifacts/… tags must still attach.
+
+        The system prompt shows the tag in code font, so models copy
+        `` `MEDIA:/workspace/artifacts/foo.png` `` into replies. Masking
+        that as documentation leaked the path as WhatsApp text and skipped
+        the native upload.
+        """
+        content = (
+            "Here is the watch on your wrist.\n"
+            "`MEDIA:/workspace/artifacts/photorealistic_watch.png`"
+        )
+        media, cleaned = BasePlatformAdapter.extract_media(content)
+        assert media == [("/workspace/artifacts/photorealistic_watch.png", False)]
+        assert "MEDIA:" not in cleaned
+        assert "/workspace/artifacts/photorealistic_watch.png" not in cleaned
+        assert "Here is the watch on your wrist." in cleaned
+
     def test_media_in_blockquote_ignored(self):
         """MEDIA: inside a > blockquote must not be extracted."""
         content = "> To send an image, include MEDIA:/path/to/image.jpg\nEnd."

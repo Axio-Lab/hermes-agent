@@ -22,6 +22,7 @@ import platform
 import re
 import signal
 import subprocess
+import time
 
 _IS_WINDOWS = platform.system() == "Windows"
 from pathlib import Path
@@ -397,6 +398,9 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         )
         self._pending_text_batches: Dict[str, MessageEvent] = {}
         self._pending_text_batch_tasks: Dict[str, asyncio.Task] = {}
+        # Dedupe native uploads when send() extracts MEDIA: and the gateway
+        # later delivers the same file via send_image_file.
+        self._recent_media_sends: Dict[str, float] = {}
 
     def _coerce_float_extra(self, key: str, default: float) -> float:
         """Read a float from ``config.extra``, guarding against bad/non-finite values.
@@ -796,6 +800,59 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         self._close_bridge_log()
         print(f"[{self.name}] Disconnected")
     
+    def _strip_outbound_media_tags(self, content: str):
+        """Remove MEDIA: directives from WhatsApp-visible text.
+
+        Returns ``(cleaned_text, media_files)``. Streaming edits and the
+        gateway extract pipeline can miss backtick-wrapped tags; stripping
+        here is the last line of defence so ``MEDIA:/workspace/...`` never
+        lands in the chat as plain text.
+        """
+        from gateway.platforms.base import _strip_media_directives
+
+        if not content or "MEDIA:" not in content:
+            return content, []
+        media_files, cleaned = self.extract_media(content)
+        media_files = self.filter_media_delivery_paths(media_files)
+        cleaned = _strip_media_directives(cleaned).strip()
+        return cleaned, media_files
+
+    async def _deliver_extracted_media(
+        self,
+        chat_id: str,
+        media_files,
+    ) -> Optional[str]:
+        """Send extracted MEDIA: files natively. Returns last message id."""
+        from gateway.platforms.base import should_send_media_as_audio
+
+        last_id = None
+        image_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+        video_exts = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".3gp"}
+        for media_path, is_voice in media_files or []:
+            ext = Path(media_path).suffix.lower()
+            try:
+                if ext in image_exts and not is_voice:
+                    result = await self.send_image_file(chat_id, media_path)
+                elif ext in video_exts:
+                    result = await self.send_video(chat_id, media_path)
+                elif should_send_media_as_audio("whatsapp", ext, is_voice=is_voice):
+                    result = await self.send_voice(chat_id, media_path)
+                else:
+                    result = await self.send_document(chat_id, media_path)
+                if result.success and result.message_id:
+                    last_id = result.message_id
+                elif not result.success:
+                    logger.warning(
+                        "[%s] Extracted media delivery failed for %s: %s",
+                        self.name, media_path, result.error,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "[%s] Extracted media delivery error for %s: %s",
+                    self.name, media_path, exc,
+                )
+        return last_id
+
     async def send(
         self,
         chat_id: str,
@@ -807,6 +864,9 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
 
         Formats markdown for WhatsApp, splits long messages into chunks
         that preserve code block boundaries, and sends each chunk sequentially.
+        MEDIA: tags are stripped from the visible text and uploaded as native
+        attachments (Telegram already does this in the gateway pipeline;
+        WhatsApp streaming/edit often left the path in the bubble).
         """
         if not self._running or not self._http_session:
             return SendResult(success=False, error="Not connected")
@@ -814,7 +874,14 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         if bridge_exit:
             return SendResult(success=False, error=bridge_exit)
 
+        media_files = []
+        if content:
+            content, media_files = self._strip_outbound_media_tags(content)
+
         if not content or not content.strip():
+            if media_files:
+                media_id = await self._deliver_extracted_media(chat_id, media_files)
+                return SendResult(success=True, message_id=media_id)
             return SendResult(success=True, message_id=None)
 
         chat_id = to_whatsapp_jid(chat_id)
@@ -852,6 +919,10 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                 if len(chunks) > 1:
                     await asyncio.sleep(0.3)
 
+            if media_files:
+                media_id = await self._deliver_extracted_media(chat_id, media_files)
+                last_message_id = last_message_id or media_id
+
             return SendResult(
                 success=True,
                 message_id=last_message_id,
@@ -873,6 +944,13 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         bridge_exit = await self._check_managed_bridge_exit()
         if bridge_exit:
             return SendResult(success=False, error=bridge_exit)
+        # Strip MEDIA: so streaming edits never freeze the workspace path
+        # into the visible bubble. Files are delivered once via send() /
+        # _deliver_media_from_response — not on every progressive edit.
+        if content:
+            content, _ = self._strip_outbound_media_tags(content)
+        if not content:
+            content = " "
         try:
             import aiohttp
             async with self._http_session.post(
@@ -911,6 +989,23 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
 
             if not os.path.exists(file_path):
                 return SendResult(success=False, error=f"File not found: {file_path}")
+
+            try:
+                resolved = os.path.realpath(file_path)
+            except OSError:
+                resolved = file_path
+            recent = getattr(self, "_recent_media_sends", None)
+            if recent is None:
+                recent = {}
+                self._recent_media_sends = recent
+            now = time.monotonic()
+            stale = [key for key, ts in recent.items() if now - ts > 60.0]
+            for key in stale:
+                recent.pop(key, None)
+            last_sent = recent.get(resolved)
+            if last_sent is not None and now - last_sent < 60.0:
+                return SendResult(success=True, message_id=None)
+            recent[resolved] = now
 
             payload: Dict[str, Any] = {
                 "chatId": to_whatsapp_jid(chat_id),

@@ -50,6 +50,8 @@ def _make_adapter():
     adapter._allow_from = set()
     adapter._group_policy = "open"
     adapter._group_allow_from = set()
+    adapter._recent_media_sends = {}
+    adapter._shutting_down = False
     return adapter
 
 
@@ -287,6 +289,72 @@ class TestSendChunking:
         result = await adapter.send("chat1", "hello")
         assert not result.success
         assert "Internal Server Error" in result.error
+
+    @pytest.mark.asyncio
+    async def test_send_strips_media_tag_from_visible_text(self, tmp_path):
+        """MEDIA:/workspace/artifacts/... must not appear in the WhatsApp bubble."""
+        adapter = _make_adapter()
+        image = tmp_path / "watch.png"
+        image.write_bytes(b"\x89PNG\r\n")
+        resp = MagicMock(status=200)
+        resp.json = AsyncMock(return_value={"messageId": "msg1"})
+        adapter._http_session.post = MagicMock(return_value=_AsyncCM(resp))
+        adapter._send_media_to_bridge = AsyncMock(
+            return_value=MagicMock(success=True, message_id="media1", error=None)
+        )
+
+        result = await adapter.send(
+            "chat1",
+            f"Here is how the watch looks on your wrist.\nMEDIA:{image}",
+        )
+        assert result.success
+        send_payloads = [
+            (c.kwargs.get("json") or (c[1].get("json") if len(c) > 1 else None))
+            for c in adapter._http_session.post.call_args_list
+        ]
+        send_payloads = [p for p in send_payloads if p and "message" in p]
+        assert send_payloads
+        assert all("MEDIA:" not in p["message"] for p in send_payloads)
+        assert all(str(image) not in p["message"] for p in send_payloads)
+        assert "watch looks" in send_payloads[0]["message"]
+        adapter._send_media_to_bridge.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_send_strips_backticked_artifact_media_tag(self):
+        adapter = _make_adapter()
+        resp = MagicMock(status=200)
+        resp.json = AsyncMock(return_value={"messageId": "msg1"})
+        adapter._http_session.post = MagicMock(return_value=_AsyncCM(resp))
+
+        await adapter.send(
+            "chat1",
+            "Here is the look.\n`MEDIA:/workspace/artifacts/outfit.png`",
+        )
+
+        payload = adapter._http_session.post.call_args.kwargs.get("json") or (
+            adapter._http_session.post.call_args[1].get("json")
+        )
+        assert "MEDIA:" not in payload["message"]
+        assert "/workspace/artifacts/outfit.png" not in payload["message"]
+
+    @pytest.mark.asyncio
+    async def test_edit_message_strips_media_tag(self):
+        adapter = _make_adapter()
+        resp = MagicMock(status=200)
+        resp.json = AsyncMock(return_value={"success": True})
+        adapter._http_session.post = MagicMock(return_value=_AsyncCM(resp))
+
+        result = await adapter.edit_message(
+            "chat1",
+            "mid-1",
+            "Here is the watch.\nMEDIA:/workspace/artifacts/watch.png",
+        )
+        assert result.success
+        payload = adapter._http_session.post.call_args.kwargs.get("json") or (
+            adapter._http_session.post.call_args[1].get("json")
+        )
+        assert "MEDIA:" not in payload["message"]
+        assert "Here is the watch." in payload["message"]
 
     @pytest.mark.asyncio
     async def test_not_connected_returns_failure(self):

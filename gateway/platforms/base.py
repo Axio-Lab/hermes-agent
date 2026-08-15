@@ -1404,6 +1404,17 @@ MEDIA_TAG_CLEANUP_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Inline-code spans that are a real deliverable under ``*/artifacts/`` —
+# with or without a ``MEDIA:`` prefix. Models commonly wrap those paths in
+# backticks (the system prompt itself shows the tag in code font), which
+# used to hide them from extract_media and leak ``MEDIA:/workspace/...`` as
+# visible chat text on WhatsApp.
+_ARTIFACT_INLINE_CODE_RE = re.compile(
+    r'`(?:MEDIA:\s*)?((?:~/|/|[A-Za-z]:[/\\])(?:[\w.\-]+[/\\])*artifacts[/\\]'
+    r'(?:[\w.\-]+[/\\])*[\w.\-]+\.(?:' + _MEDIA_EXT_ALTERNATION + r'))`',
+    re.IGNORECASE,
+)
+
 
 def get_document_cache_dir() -> Path:
     """Return the document cache directory, creating it if it doesn't exist."""
@@ -3209,8 +3220,15 @@ class BasePlatformAdapter(ABC):
             spans.append((m.start(), m.end()))
 
         # Inline code: `...` but NOT backtick-quoted paths in MEDIA: tags
+        # and NOT `` `MEDIA:/…/artifacts/file.png` `` / `` `/…/artifacts/file.png` ``
+        # (models wrap real attachments that way; those must still deliver).
+        artifact_inline_spans = {
+            (m.start(), m.end()) for m in _ARTIFACT_INLINE_CODE_RE.finditer(content)
+        }
         for m in re.finditer(r'`[^`\n]+`', content):
             start = m.start()
+            if (start, m.end()) in artifact_inline_spans:
+                continue
             # Check if this is a backtick-quoted path after MEDIA:
             prefix = content[max(0, start - 20):start]
             if re.search(r'MEDIA:\s*$', prefix):
@@ -3400,13 +3418,8 @@ class BasePlatformAdapter(ABC):
         code_spans: list = []
         for m in re.finditer(r'```[^\n]*\n.*?```', content, re.DOTALL):
             code_spans.append((m.start(), m.end()))
-        artifact_inline_re = re.compile(
-            r'`((?:~/|/|[A-Za-z]:[/\\])(?:[\w.\-]+[/\\])*artifacts[/\\]'
-            r'(?:[\w.\-]+[/\\])*[\w.\-]+\.(?:' + ext_part + r'))`',
-            re.IGNORECASE,
-        )
         artifact_inline_spans = {
-            (m.start(), m.end()) for m in artifact_inline_re.finditer(content)
+            (m.start(), m.end()) for m in _ARTIFACT_INLINE_CODE_RE.finditer(content)
         }
         for m in re.finditer(r'`[^`\n]+`', content):
             if (m.start(), m.end()) in artifact_inline_spans:
