@@ -5662,6 +5662,13 @@ def _messaging_platform_payload(
         error_code = error_code or "startup_failed"
         error_message = error_message or runtime_gateway_error
 
+    if platform_id == "whatsapp" and configured and error_code == "whatsapp_not_paired":
+        # Pairing files exist; the live adapter looked in the wrong session dir.
+        error_code = None
+        error_message = None
+        if state == "fatal":
+            state = "pending_restart" if gateway_running else "gateway_stopped"
+
     if platform_id == "whatsapp" and not configured:
         if error_code == "whatsapp_not_paired":
             error_code = None
@@ -5861,28 +5868,9 @@ def _write_platform_enabled(platform_id: str, enabled: bool) -> None:
 
 
 def _whatsapp_session_dir(connection_id: str | None = None) -> Path:
-    from hermes_constants import get_hermes_dir
+    from gateway.connections import resolve_whatsapp_session_dir
 
-    from gateway.connections import DEFAULT_CONNECTION_ID, is_default_connection, sanitize_connection_id
-
-    if is_default_connection(connection_id):
-        # Legacy path for the default connection; also check migrated multi-session dir.
-        legacy = get_hermes_dir("platforms/whatsapp/session", "whatsapp/session")
-        multi = get_hermes_dir(
-            f"platforms/whatsapp/sessions/{DEFAULT_CONNECTION_ID}",
-            f"whatsapp/sessions/{DEFAULT_CONNECTION_ID}",
-        )
-        if (legacy / "creds.json").is_file():
-            legacy.mkdir(parents=True, exist_ok=True)
-            return legacy
-        multi.mkdir(parents=True, exist_ok=True)
-        return multi
-
-    safe = sanitize_connection_id(connection_id)
-    session_dir = get_hermes_dir(
-        f"platforms/whatsapp/sessions/{safe}",
-        f"whatsapp/sessions/{safe}",
-    )
+    session_dir = resolve_whatsapp_session_dir(connection_id)
     session_dir.mkdir(parents=True, exist_ok=True)
     return session_dir
 

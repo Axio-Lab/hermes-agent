@@ -230,3 +230,25 @@ def test_webhook_recover_keeps_default_when_enabled(tmp_path, monkeypatch):
         "webhook", {"WEBHOOK_ENABLED": "true"}, persist=True
     )
     assert [r.id for r in records] == [DEFAULT_CONNECTION_ID]
+
+
+def test_resolve_whatsapp_session_dir_prefers_legacy_creds(tmp_path, monkeypatch):
+    from gateway.connections import resolve_whatsapp_session_dir
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    legacy = tmp_path / "platforms" / "whatsapp" / "session"
+    legacy.mkdir(parents=True)
+    (legacy / "creds.json").write_text("{}", encoding="utf-8")
+
+    assert resolve_whatsapp_session_dir() == legacy
+    assert resolve_whatsapp_session_dir("default") == legacy
+
+
+def test_resolve_whatsapp_session_dir_uses_multi_session_default(tmp_path, monkeypatch):
+    from gateway.connections import resolve_whatsapp_session_dir
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    expected = tmp_path / "platforms" / "whatsapp" / "sessions" / "default"
+
+    assert resolve_whatsapp_session_dir() == expected
+    assert resolve_whatsapp_session_dir("default") == expected

@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 import secrets
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 DEFAULT_CONNECTION_ID = "default"
@@ -688,6 +689,32 @@ def merge_env_discovered_connections(
             changed = True
 
     return out, changed
+
+
+def resolve_whatsapp_session_dir(connection_id: Optional[str] = None) -> Path:
+    """Return the Baileys session directory for a WhatsApp connection.
+
+    QR pairing writes the default account to ``sessions/default``. The live
+    adapter used to look only at the legacy ``session`` folder, so a paired
+    account looked connected in the UI and fatal in the gateway.
+    """
+    from hermes_constants import get_hermes_dir
+
+    if is_default_connection(connection_id):
+        legacy = get_hermes_dir("platforms/whatsapp/session", "whatsapp/session")
+        multi = get_hermes_dir(
+            f"platforms/whatsapp/sessions/{DEFAULT_CONNECTION_ID}",
+            f"whatsapp/sessions/{DEFAULT_CONNECTION_ID}",
+        )
+        if (legacy / "creds.json").is_file():
+            return legacy
+        return multi
+
+    safe = sanitize_connection_id(connection_id or "")
+    return get_hermes_dir(
+        f"platforms/whatsapp/sessions/{safe}",
+        f"whatsapp/sessions/{safe}",
+    )
 
 
 def _whatsapp_default_creds_paths():

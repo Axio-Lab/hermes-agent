@@ -351,10 +351,16 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
             "bridge_script",
             str(self._DEFAULT_BRIDGE_DIR / "bridge.js"),
         )
-        self._session_path: Path = Path(config.extra.get(
-            "session_path",
-            get_hermes_dir("platforms/whatsapp/session", "whatsapp/session")
-        ))
+        if config.extra.get("session_path"):
+            session_path = Path(config.extra["session_path"])
+        else:
+            try:
+                from gateway.connections import resolve_whatsapp_session_dir
+
+                session_path = resolve_whatsapp_session_dir(config.extra.get("connection_id"))
+            except Exception:
+                session_path = Path(get_hermes_dir("platforms/whatsapp/session", "whatsapp/session"))
+        self._session_path: Path = session_path
         self._reply_prefix: Optional[str] = config.extra.get("reply_prefix")
         self._dm_policy = str(config.extra.get("dm_policy") or os.getenv("WHATSAPP_DM_POLICY", "open")).strip().lower()
         self._allow_from = self._coerce_allow_list(config.extra.get("allow_from") or config.extra.get("allowFrom"))

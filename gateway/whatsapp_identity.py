@@ -48,7 +48,12 @@ _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9@.+\-]+$")
 
 def _whatsapp_session_dir() -> Path:
     """Return the Baileys session directory (matches the WhatsApp adapter)."""
-    return Path(get_hermes_dir("platforms/whatsapp/session", "whatsapp/session"))
+    try:
+        from gateway.connections import resolve_whatsapp_session_dir
+
+        return resolve_whatsapp_session_dir()
+    except Exception:
+        return Path(get_hermes_dir("platforms/whatsapp/session", "whatsapp/session"))
 
 
 def normalize_whatsapp_identifier(value: str) -> str:

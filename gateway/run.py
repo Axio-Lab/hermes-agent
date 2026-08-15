@@ -7438,12 +7438,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             ).strip()
             if platform_id == "whatsapp":
                 # Pairing is session-dir based; skip if no session yet.
-                from hermes_constants import get_hermes_dir
+                from gateway.connections import resolve_whatsapp_session_dir
 
-                session = get_hermes_dir(
-                    f"platforms/whatsapp/sessions/{record.id}",
-                    f"whatsapp/sessions/{record.id}",
-                )
+                session = resolve_whatsapp_session_dir(record.id)
                 if not (session / "creds.json").is_file():
                     logger.info(
                         "Skipping WhatsApp connection %s — not paired", record.id
@@ -7485,14 +7482,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 if access:
                     cfg.extra["access_token"] = access
             if platform_id == "whatsapp":
-                from hermes_constants import get_hermes_dir
+                from gateway.connections import resolve_whatsapp_session_dir
 
-                cfg.extra["session_path"] = str(
-                    get_hermes_dir(
-                        f"platforms/whatsapp/sessions/{record.id}",
-                        f"whatsapp/sessions/{record.id}",
-                    )
-                )
+                cfg.extra["session_path"] = str(resolve_whatsapp_session_dir(record.id))
 
             adapter = self._create_adapter(platform, cfg)
             if not adapter:
@@ -7539,6 +7531,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 "thread_sessions_per_user",
                 getattr(self.config, "thread_sessions_per_user", False),
             )
+            if platform.value == "whatsapp" and not config.extra.get("session_path"):
+                from gateway.connections import resolve_whatsapp_session_dir
+
+                config.extra["session_path"] = str(
+                    resolve_whatsapp_session_dir(config.extra.get("connection_id"))
+                )
 
         # ── Plugin-registered platforms (checked first) ───────────────────
         try:
