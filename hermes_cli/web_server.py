@@ -900,6 +900,7 @@ class AgentOneshotRequest(BaseModel):
     task: Optional[str] = None
     max_tokens: Optional[int] = None
     temperature: Optional[float] = None
+    images: Optional[List[str]] = None
 
 
 class ManagedFileUpload(BaseModel):
@@ -2920,6 +2921,7 @@ def agent_oneshot(payload: AgentOneshotRequest):
             task=task,
             max_tokens=payload.max_tokens or 1024,
             temperature=payload.temperature if payload.temperature is not None else 0.3,
+            images=payload.images or [],
         ).strip()
     except KeyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

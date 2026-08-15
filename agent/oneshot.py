@@ -21,8 +21,10 @@ the live session's provider/model, otherwise the configured ``task`` (default
 ``title_generation``) resolves a cheap/fast backend.
 """
 
+import base64
 import logging
-from typing import Any, Callable, Dict, Optional, Tuple
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from agent.auxiliary_client import call_llm, extract_content_or_reasoning
 
@@ -103,6 +105,51 @@ def render_template(name: str, variables: Optional[Dict[str, Any]] = None) -> Tu
     return template(variables or {})
 
 
+_IMAGE_MIME_BY_SUFFIX = {
+    ".bmp": "image/bmp",
+    ".gif": "image/gif",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
+_MAX_LOCAL_IMAGE_BYTES = 8 * 1024 * 1024
+
+
+def _normalize_image_ref(value: str) -> str:
+    """Turn an http(s) URL, data URL, or local image path into a model image URL."""
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith(("http://", "https://", "data:image/")):
+        return raw
+    path = Path(raw).expanduser()
+    try:
+        if not path.is_file():
+            return ""
+        size = path.stat().st_size
+        if size <= 0 or size > _MAX_LOCAL_IMAGE_BYTES:
+            return ""
+        mime = _IMAGE_MIME_BY_SUFFIX.get(path.suffix.lower(), "image/jpeg")
+        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        return f"data:{mime};base64,{encoded}"
+    except OSError:
+        return ""
+
+
+def _user_content(user_input: str, images: Sequence[str] | None) -> Any:
+    refs = [_normalize_image_ref(str(item)) for item in (images or [])]
+    refs = [item for item in refs if item]
+    if not refs:
+        return user_input or ""
+    parts: List[Dict[str, Any]] = [
+        {"type": "text", "text": user_input or "Evaluate the attached image(s)."}
+    ]
+    for url in refs:
+        parts.append({"type": "image_url", "image_url": {"url": url}})
+    return parts
+
+
 def run_oneshot(
     *,
     instructions: str = "",
@@ -114,6 +161,7 @@ def run_oneshot(
     temperature: Optional[float] = 0.3,
     timeout: float = 60.0,
     main_runtime: Optional[Dict[str, Any]] = None,
+    images: Optional[Sequence[str]] = None,
 ) -> str:
     """Run a single stateless LLM request and return its text.
 
@@ -130,10 +178,14 @@ def run_oneshot(
     if not (instructions or "").strip() and not (user_input or "").strip():
         raise ValueError("run_oneshot requires a template or instructions/user_input")
 
+    image_refs = [str(item).strip() for item in (images or []) if str(item).strip()]
+    if image_refs and task == "title_generation":
+        task = "vision"
+
     messages = []
     if (instructions or "").strip():
         messages.append({"role": "system", "content": instructions})
-    messages.append({"role": "user", "content": user_input or ""})
+    messages.append({"role": "user", "content": _user_content(user_input or "", image_refs)})
 
     response = call_llm(
         task=task,

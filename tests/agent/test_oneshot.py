@@ -96,6 +96,24 @@ class TestRunOneshot:
         ):
             assert run_oneshot(instructions="x", user_input="y") == "fix: bug"
 
+    def test_images_use_vision_task_and_multimodal_content(self):
+        with patch(
+            "agent.oneshot.call_llm",
+            return_value=self._mock_response('{"score": 80}'),
+        ) as llm:
+            out = run_oneshot(
+                instructions="score this",
+                user_input="kitchen inspection",
+                images=["https://files.example/kitchen.jpg"],
+            )
+
+        assert out == '{"score": 80}'
+        assert llm.call_args.kwargs["task"] == "vision"
+        content = llm.call_args.kwargs["messages"][1]["content"]
+        assert content[0] == {"type": "text", "text": "kitchen inspection"}
+        assert content[1]["type"] == "image_url"
+        assert content[1]["image_url"]["url"] == "https://files.example/kitchen.jpg"
+
 
 class TestHelpers:
     def test_truncate_under_limit_unchanged(self):

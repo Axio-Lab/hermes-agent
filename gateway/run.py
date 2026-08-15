@@ -10014,6 +10014,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 "message": message_text[:500],
                 "message_full": message_text[:50000],
                 "message_id": str(getattr(event, "message_id", None) or ""),
+                "sender_name": str(getattr(source, "sender_name", None) or getattr(event, "sender_name", None) or ""),
+                "media_urls": [str(url) for url in (getattr(event, "media_urls", None) or []) if str(url).strip()],
             }
             from gateway.verxio_workflow_hook import handle_verxio_workflow
 
