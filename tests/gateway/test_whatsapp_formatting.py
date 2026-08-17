@@ -146,6 +146,33 @@ class TestFormatMessage:
         assert "~strike~" in result
         assert "```\ncode\n```" in result
 
+    def test_html_tags_become_whatsapp_text(self):
+        adapter = _make_adapter()
+        result = adapter.format_message(
+            "<b>Ade</b> owes you <strong>10,000 NGN</strong>.<br>Last sale: 2026-08-16"
+        )
+        assert "<b>" not in result
+        assert "<br>" not in result
+        assert "*Ade*" in result
+        assert "*10,000 NGN*" in result
+        assert "Last sale: 2026-08-16" in result
+
+    def test_html_link_and_entities(self):
+        adapter = _make_adapter()
+        result = adapter.format_message(
+            'See <a href="https://example.com">the sheet</a> &amp; notes'
+        )
+        assert "<a" not in result
+        assert "the sheet (https://example.com)" in result
+        assert "& notes" in result
+
+    def test_html_paragraphs_become_line_breaks(self):
+        adapter = _make_adapter()
+        result = adapter.format_message("<p>Sales: 72,000</p><p>Cash: 53,500</p>")
+        assert "<p>" not in result
+        assert "Sales: 72,000" in result
+        assert "Cash: 53,500" in result
+
 
 # ---------------------------------------------------------------------------
 # MAX_MESSAGE_LENGTH tests
@@ -413,6 +440,6 @@ class TestWhatsAppTier:
         # TIER_MEDIUM has streaming: None (follow global), not False
         assert resolve_display_setting({}, "whatsapp", "streaming") is None
 
-    def test_whatsapp_tool_progress_is_new(self):
+    def test_whatsapp_tool_progress_is_off(self):
         from gateway.display_config import resolve_display_setting
-        assert resolve_display_setting({}, "whatsapp", "tool_progress") == "new"
+        assert resolve_display_setting({}, "whatsapp", "tool_progress") == "off"

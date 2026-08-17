@@ -31,6 +31,7 @@ defined on the mixin and may be overridden per-adapter if needed.
 
 from __future__ import annotations
 
+import html as html_lib
 import json
 import logging
 import os
@@ -307,10 +308,13 @@ class WhatsAppBehaviorMixin:
         for bold/italic/strikethrough, so we convert here.
 
         Code blocks (``` fenced) and inline code (`) are protected from
-        conversion via placeholder substitution.
+        conversion via placeholder substitution. HTML is converted or
+        stripped — WhatsApp renders tags as literal text.
         """
         if not content:
             return content
+
+        content = _html_to_whatsapp_text(content)
 
         # --- 1. Protect fenced code blocks from formatting changes ---
         _FENCE_PH = "\x00FENCE"
@@ -365,6 +369,35 @@ class WhatsAppBehaviorMixin:
             result = result.replace(f"{_CODE_PH}{i}\x00", code)
 
         return result
+
+
+def _html_to_whatsapp_text(content: str) -> str:
+    """Turn HTML into WhatsApp-readable text; leave plain text alone."""
+    if "&" in content:
+        content = html_lib.unescape(content)
+    if "<" not in content:
+        return content
+
+    content = re.sub(r"(?i)<br\s*/?>", "\n", content)
+    content = re.sub(r"(?i)</p\s*>", "\n\n", content)
+    content = re.sub(r"(?i)</div\s*>", "\n", content)
+    content = re.sub(r"(?i)</h[1-6]\s*>", "\n", content)
+    content = re.sub(r"(?i)</li\s*>", "\n", content)
+    content = re.sub(r"(?i)<hr\s*/?>", "\n", content)
+    content = re.sub(
+        r'(?is)<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
+        r"\2 (\1)",
+        content,
+    )
+    content = re.sub(r"(?is)<(?:b|strong)>(.*?)</(?:b|strong)>", r"*\1*", content)
+    content = re.sub(r"(?is)<(?:i|em)>(.*?)</(?:i|em)>", r"_\1_", content)
+    content = re.sub(r"(?is)<(?:s|strike|del)>(.*?)</(?:s|strike|del)>", r"~\1~", content)
+    content = re.sub(r"(?is)<code>(.*?)</code>", r"`\1`", content)
+    content = re.sub(r"(?is)<pre(?:\s[^>]*)?>(.*?)</pre>", r"```\n\1\n```", content)
+    content = re.sub(r"<[^>]+>", "", content)
+    content = html_lib.unescape(content)
+    content = re.sub(r"\n{3,}", "\n\n", content)
+    return content.strip()
 
 
 # ---------------------------------------------------------------------------

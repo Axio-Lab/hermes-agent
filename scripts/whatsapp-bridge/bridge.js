@@ -78,6 +78,13 @@ const DEFAULT_REPLY_PREFIX = `⚕ *${BROWSER_NAME}*\n─────────
 const REPLY_PREFIX = process.env.WHATSAPP_REPLY_PREFIX === undefined
   ? DEFAULT_REPLY_PREFIX
   : process.env.WHATSAPP_REPLY_PREFIX.replace(/\\n/g, '\n');
+// Verxio (and other hosts) set an empty reply_prefix so bubbles stay clean.
+// Self-chat then cannot tell a user tap from our own tool-progress echo, so
+// ⚙️ tool_search / tool_call messages get ingested as new turns and the
+// final answer never lands. A zero-width mark is invisible but filterable.
+const ECHO_MARK = '\u200b';
+const OUTBOUND_PREFIX = REPLY_PREFIX || (WHATSAPP_MODE === 'self-chat' ? ECHO_MARK : '');
+const TOOL_PROGRESS_RE = /^(?:[\u200b\s]*)(?:⚙️|🔧|🔍)?\s*(?:tool_search|tool_call|tool_describe|cronjob)\b/;
 const MAX_MESSAGE_LENGTH = parseInt(process.env.WHATSAPP_MAX_MESSAGE_LENGTH || '4096', 10);
 const CHUNK_DELAY_MS = parseInt(process.env.WHATSAPP_CHUNK_DELAY_MS || '300', 10);
 // Per-call timeout for sock.sendMessage(). Baileys occasionally hangs forever
@@ -107,7 +114,7 @@ function formatOutgoingMessage(message) {
   // redundant — the sender identity is already clear.  Only prepend in
   // self-chat mode where bot and user share the same number.
   if (WHATSAPP_MODE !== 'self-chat') return message;
-  return REPLY_PREFIX ? `${REPLY_PREFIX}${message}` : message;
+  return OUTBOUND_PREFIX ? `${OUTBOUND_PREFIX}${message}` : message;
 }
 
 function splitLongMessage(message, maxLength = MAX_MESSAGE_LENGTH) {
@@ -140,6 +147,41 @@ function trackSentMessageId(sent) {
       recentlySentIds.delete(recentlySentIds.values().next().value);
     }
   }
+}
+
+function stripEchoMark(text) {
+  return String(text || '').replace(/^\u200b+/, '');
+}
+
+function trackOutboundBody(body) {
+  const now = Date.now();
+  const raw = String(body || '');
+  recentOutboundBodies.set(raw, now + 15000);
+  recentOutboundBodies.set(stripEchoMark(raw), now + 15000);
+  if (recentOutboundBodies.size > 80) {
+    for (const [key, exp] of recentOutboundBodies) {
+      if (exp < now) recentOutboundBodies.delete(key);
+    }
+  }
+}
+
+function isRecentOutboundBody(body) {
+  const now = Date.now();
+  for (const [key, exp] of recentOutboundBodies) {
+    if (exp < now) recentOutboundBodies.delete(key);
+  }
+  const raw = String(body || '');
+  return recentOutboundBodies.has(raw) || recentOutboundBodies.has(stripEchoMark(raw));
+}
+
+function isAgentEcho(body, messageId) {
+  if (messageId && recentlySentIds.has(messageId)) return true;
+  if (OUTBOUND_PREFIX && body.startsWith(OUTBOUND_PREFIX)) return true;
+  if (REPLY_PREFIX && body.startsWith(REPLY_PREFIX)) return true;
+  if (body.startsWith(ECHO_MARK)) return true;
+  if (TOOL_PROGRESS_RE.test(body)) return true;
+  if (isRecentOutboundBody(body)) return true;
+  return false;
 }
 
 function normalizeWhatsAppId(value) {
@@ -196,6 +238,9 @@ const MAX_QUEUE_SIZE = 100;
 // Track recently sent message IDs to prevent echo-back loops with media
 const recentlySentIds = new Set();
 const MAX_RECENT_IDS = 50;
+// Baileys often upserts fromMe before sendMessage returns the id. Body
+// matching covers that race when reply_prefix is empty (Verxio default).
+const recentOutboundBodies = new Map();
 
 let sock = null;
 let connectionState = 'disconnected';
@@ -433,7 +478,7 @@ async function startSocket() {
       }
 
       // Ignore Hermes' own reply messages in self-chat mode to avoid loops.
-      if (msg.key.fromMe && ((REPLY_PREFIX && body.startsWith(REPLY_PREFIX)) || recentlySentIds.has(msg.key.id))) {
+      if (msg.key.fromMe && isAgentEcho(body, msg.key.id)) {
         if (WHATSAPP_DEBUG) {
           try { console.log(JSON.stringify({ event: 'ignored', reason: 'agent_echo', chatId, messageId: msg.key.id })); } catch {}
         }
@@ -521,9 +566,18 @@ app.get('/messages', (req, res) => {
   res.json(msgs);
 });
 
+async function waitUntilConnected(timeoutMs = 20000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (sock && connectionState === 'connected') return true;
+    await sleep(400);
+  }
+  return !!(sock && connectionState === 'connected');
+}
+
 // Send a message
 app.post('/send', async (req, res) => {
-  if (!sock || connectionState !== 'connected') {
+  if (!(await waitUntilConnected(20000))) {
     return res.status(503).json({ error: 'Not connected to WhatsApp' });
   }
 
@@ -536,6 +590,7 @@ app.post('/send', async (req, res) => {
     const chunks = splitLongMessage(formatOutgoingMessage(message));
     const messageIds = [];
     for (let i = 0; i < chunks.length; i += 1) {
+      trackOutboundBody(chunks[i]);
       const sent = await sendWithTimeout(chatId, { text: chunks[i] });
       trackSentMessageId(sent);
       if (sent?.key?.id) messageIds.push(sent.key.id);
@@ -570,9 +625,11 @@ app.post('/edit', async (req, res) => {
     const chunks = splitLongMessage(formatOutgoingMessage(message));
     const messageIds = [];
 
+    trackOutboundBody(chunks[0]);
     await sendWithTimeout(chatId, { text: chunks[0], edit: key });
     if (chunks.length > 1) {
       for (let i = 1; i < chunks.length; i += 1) {
+        trackOutboundBody(chunks[i]);
         const sent = await sendWithTimeout(chatId, { text: chunks[i] });
         trackSentMessageId(sent);
         if (sent?.key?.id) messageIds.push(sent.key.id);
@@ -674,6 +731,7 @@ app.post('/send-media', async (req, res) => {
         break;
     }
 
+    if (caption) trackOutboundBody(formatOutgoingMessage(caption));
     const sent = await sendWithTimeout(chatId, msgPayload);
 
     trackSentMessageId(sent);

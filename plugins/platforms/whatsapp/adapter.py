@@ -853,6 +853,16 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                 )
         return last_id
 
+    def format_tool_event(self, event: Any, *, mode: str = "all",
+                          preview_max_len: int = 40) -> Optional[str]:
+        # Self-chat shares the user's number. Progress bubbles are fromMe and
+        # get re-ingested as new turns when reply_prefix is empty (Verxio).
+        if os.getenv("WHATSAPP_MODE", "self-chat") == "self-chat":
+            return None
+        return super().format_tool_event(
+            event, mode=mode, preview_max_len=preview_max_len
+        )
+
     async def send(
         self,
         chat_id: str,
@@ -903,17 +913,24 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                     # Only reply-to on the first chunk
                     payload["replyTo"] = reply_to
 
-                async with self._http_session.post(
-                    f"http://127.0.0.1:{self._bridge_port}/send",
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=30)
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        last_message_id = data.get("messageId")
-                    else:
+                error = None
+                for attempt in range(3):
+                    async with self._http_session.post(
+                        f"http://127.0.0.1:{self._bridge_port}/send",
+                        json=payload,
+                        timeout=aiohttp.ClientTimeout(total=45)
+                    ) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            last_message_id = data.get("messageId")
+                            error = None
+                            break
                         error = await resp.text()
-                        return SendResult(success=False, error=error)
+                        if resp.status != 503 or attempt == 2:
+                            return SendResult(success=False, error=error)
+                    await asyncio.sleep(2 * (attempt + 1))
+                if error:
+                    return SendResult(success=False, error=error)
 
                 # Small delay between chunks to avoid rate limiting
                 if len(chunks) > 1:
@@ -951,6 +968,8 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
             content, _ = self._strip_outbound_media_tags(content)
         if not content:
             content = " "
+        else:
+            content = self.format_message(content)
         try:
             import aiohttp
             async with self._http_session.post(
