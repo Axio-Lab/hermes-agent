@@ -2209,6 +2209,99 @@ def _merge_with_models_dev(provider: str, curated: list[str]) -> list[str]:
     return merged
 
 
+_OPENAI_PICKER_SKIP_PARTS = (
+    "embed",
+    "whisper",
+    "tts",
+    "dall-e",
+    "dalle",
+    "moderation",
+    "davinci",
+    "babbage",
+    "ada-",
+    "sora",
+    "realtime",
+    "transcribe",
+    "image-1",
+    "gpt-image",
+    "chatgpt-image",
+)
+
+
+def _is_openai_picker_model(model_id: str) -> bool:
+    """Return True for OpenAI chat/agent models that belong in the picker."""
+    mid = str(model_id or "").strip().lower()
+    if not mid or mid.startswith("gpt-3.5"):
+        return False
+    if any(part in mid for part in _OPENAI_PICKER_SKIP_PARTS):
+        return False
+    return mid.startswith(("gpt-", "o1", "o3", "o4", "chatgpt-"))
+
+
+def _merge_curated_then_live(curated: list[str], live: list[str]) -> list[str]:
+    """Keep curated order, then append live-only IDs without duplicates."""
+    merged: list[str] = []
+    seen: set[str] = set()
+    for model_id in (*curated, *live):
+        key = str(model_id or "").strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(str(model_id).strip())
+    return merged
+
+
+def _fetch_gemini_models(timeout: float = 8.0) -> Optional[list[str]]:
+    """Fetch generateContent models from Google AI Studio.
+
+    The Gemini native catalog is ``/v1beta/models?key=`` — Bearer auth on the
+    same path usually fails, so the generic OpenAI-compat fetcher cannot be
+    used here.
+    """
+    api_key = os.getenv("GEMINI_API_KEY", "").strip() or os.getenv("GOOGLE_API_KEY", "").strip()
+    if not api_key:
+        return None
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models"
+        f"?pageSize=200&key={urllib.parse.quote(api_key)}"
+    )
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": _HERMES_USER_AGENT,
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode())
+    except Exception as exc:
+        import logging
+
+        logging.getLogger(__name__).debug("Failed to fetch Gemini models: %s", exc)
+        return None
+
+    models: list[str] = []
+    seen: set[str] = set()
+    for item in data.get("models", []) if isinstance(data, dict) else []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if name.startswith("models/"):
+            name = name[7:]
+        if not name or "embed" in name.lower():
+            continue
+        methods = [str(method).lower() for method in (item.get("supportedGenerationMethods") or [])]
+        if methods and "generatecontent" not in methods:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        models.append(name)
+    return models or None
+
+
 def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) -> list[str]:
     """Return the best known model catalog for a provider.
 
@@ -2334,14 +2427,20 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
                     if is_default_openai:
                         live_lower = {m.lower() for m in live}
                         curated = list(_PROVIDER_MODELS.get(normalized, []))
-                        # Keep curated order; only surface curated models the
-                        # account actually has access to.
-                        filtered = [m for m in curated if m.lower() in live_lower]
-                        if filtered:
-                            return filtered
-                        # Account serves none of the curated models (rare —
-                        # e.g. org without GPT-5 access). Fall back to curated
-                        # so the picker still offers sane defaults.
+                        # Keep curated models the account can actually use,
+                        # then append newer live chat models that are not in
+                        # the static catalog yet (e.g. a freshly released GPT).
+                        available = [m for m in curated if m.lower() in live_lower]
+                        extras = [
+                            m
+                            for m in live
+                            if _is_openai_picker_model(m) and m.lower() not in {c.lower() for c in available}
+                        ]
+                        if available or extras:
+                            return available + extras
+                        # Account serves none of the curated/agent models
+                        # (rare). Fall back to curated so the picker still
+                        # offers sane defaults instead of embeddings/TTS.
                         return curated or live
                     return live
             except Exception:
@@ -2386,6 +2485,12 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
                 return ids
         except Exception:
             pass
+
+    if normalized == "gemini":
+        curated = list(_PROVIDER_MODELS.get("gemini", []))
+        live = _fetch_gemini_models()
+        merged = _merge_curated_then_live(curated, live or [])
+        return _merge_curated_then_live(merged, _merge_with_models_dev("gemini", []))
 
     # ── Profile-based generic live fetch (all simple api-key providers) ──
     # Handles any provider registered in providers/ with auth_type="api_key".

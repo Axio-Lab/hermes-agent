@@ -4,8 +4,9 @@ Bug 1 — OpenAI picker dumped the raw ``/v1/models`` catalog
     ``provider_model_ids("openai")`` hit ``api.openai.com/v1/models`` and
     returned the full 120+ entry catalog (embeddings, whisper, tts, dall-e,
     moderation, gpt-3.5, …). The ``hermes model`` CLI shows only the curated
-    agentic list. The picker now intersects the live default-endpoint catalog
-    with the curated list (preserving curated order) so both surfaces match.
+    agentic list. The picker now keeps curated models the account can use, then
+    appends newer live chat models, while still dropping embeddings /
+    whisper / TTS / image junk.
     Custom OpenAI-compatible endpoints (proxies, gateways) keep the live list
     verbatim so discovery still works.
 
@@ -50,10 +51,26 @@ def test_default_openai_endpoint_filters_to_curated(monkeypatch):
     with patch.object(M, "fetch_api_models", return_value=live):
         result = M.provider_model_ids("openai-api", force_refresh=True)
 
-    # Only curated models survive, in curated order, no junk.
+    # Curated agent models survive, in curated order. Non-agent junk is dropped.
     assert result == list(curated)
-    for m in result:
-        assert m in curated
+    for junk in ("text-embedding-3-large", "whisper-1", "tts-1", "dall-e-3", "gpt-3.5-turbo"):
+        assert junk not in result
+
+
+def test_default_openai_endpoint_appends_new_live_chat_models(monkeypatch):
+    """A newly released chat model not yet in the curated list still appears."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake")
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+
+    curated = M._PROVIDER_MODELS["openai-api"]
+    live = list(curated[:2]) + ["gpt-5.6", "text-embedding-3-large", "whisper-1"]
+    with patch.object(M, "fetch_api_models", return_value=live):
+        result = M.provider_model_ids("openai-api", force_refresh=True)
+
+    assert result[:2] == list(curated[:2])
+    assert "gpt-5.6" in result
+    assert "text-embedding-3-large" not in result
+    assert "whisper-1" not in result
 
 
 def test_default_openai_endpoint_intersects_account_access(monkeypatch):
