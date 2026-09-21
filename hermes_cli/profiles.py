@@ -819,6 +819,16 @@ def profiles_to_serve(multiplex: bool) -> List[Tuple[str, Path]]:
                 continue
             serve.append((name, entry))
 
+    try:
+        from hermes_cli.dynamic_profiles import list_dynamic_profiles
+
+        seen = {name for name, _home in serve}
+        for name, home in list_dynamic_profiles():
+            if name not in seen:
+                serve.append((name, home))
+    except Exception:
+        pass
+
     return serve
 
 
