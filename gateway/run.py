@@ -7715,6 +7715,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         """
         source = event.source
 
+        try:
+            from gateway.verxio_remote_exec import enqueue_inbound, remote_exec_enabled
+
+            if remote_exec_enabled() and await enqueue_inbound(event):
+                return None
+        except Exception:
+            logger.debug("verxio remote exec hook skipped", exc_info=True)
+
         if (
             getattr(self, "_startup_restore_in_progress", False)
             and not getattr(event, "internal", False)
