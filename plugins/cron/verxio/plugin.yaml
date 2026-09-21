@@ -1,0 +1,3 @@
+name: verxio
+description: Disable the in-process ticker and publish job defs to Verxio.
+version: 1.0.0
