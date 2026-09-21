@@ -5721,7 +5721,15 @@ def load_config() -> Dict[str, Any]:
     defensive deepcopy — that path matters in agent-loop hot spots like
     ``get_provider_request_timeout`` which is called once per API turn.
     """
-    return _load_config_impl(want_deepcopy=True)
+    cfg = _load_config_impl(want_deepcopy=True)
+    try:
+        from hermes_cli.verxio_hosted_policy import apply_hosted_tool_policy, hosted_mode
+
+        if hosted_mode():
+            return apply_hosted_tool_policy(cfg)
+    except Exception:
+        pass
+    return cfg
 
 
 def config_for_editor() -> Dict[str, Any]:
