@@ -293,6 +293,12 @@ app = FastAPI(title="Hermes Agent", version=__version__, lifespan=_lifespan)
 from hermes_cli.memory_oauth import router as _memory_oauth_router  # noqa: E402
 
 app.include_router(_memory_oauth_router)
+try:
+    from hermes_cli.verxio_internal import mount_verxio_routes
+
+    mount_verxio_routes(app)
+except Exception:
+    pass
 
 # ---------------------------------------------------------------------------
 # Session token for protecting sensitive endpoints (reveal).
