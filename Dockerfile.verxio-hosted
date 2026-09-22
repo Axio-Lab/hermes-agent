@@ -1,0 +1,6 @@
+# Slim hosted worker/channel image. Chromium lives on sandbox hosts, not here.
+FROM verxio-hermes-runtime:local
+ENV VERXIO_HOSTED=1
+ENV HERMES_DISABLE_LAZY_INSTALLS=1
+# Browser/Playwright stay unused; sandbox image owns Chromium.
+CMD ["gateway", "run"]
