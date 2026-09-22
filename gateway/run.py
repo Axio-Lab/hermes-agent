@@ -5984,6 +5984,23 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     "next_retry": time.monotonic() + 30,
                 }
 
+        # Verxio channel shard: pull this shard's tenants from the control plane
+        # and register them as dynamic profiles BEFORE secondary adapters start.
+        try:
+            from gateway import verxio_channel_shard
+
+            if verxio_channel_shard.shard_enabled():
+                self.config.multiplex_profiles = True
+                try:
+                    from agent.secret_scope import set_multiplex_active
+
+                    set_multiplex_active(True)
+                except Exception:
+                    pass
+                await verxio_channel_shard.bootstrap()
+        except Exception:
+            logger.warning("Verxio channel shard bootstrap failed", exc_info=True)
+
         # Multi-profile multiplexing: bring up adapters for every OTHER profile
         # this gateway serves. Each profile's adapters connect under that
         # profile's home + credential scope and stamp their inbound events with
@@ -6006,6 +6023,33 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             return True
         except Exception as e:
             logger.error("Secondary-profile adapter startup failed: %s", e, exc_info=True)
+
+        # Verxio remote execution: this gateway only owns connections; agent
+        # turns run on the worker pool and replies come back via long-poll.
+        try:
+            from gateway.verxio_remote_exec import DeliveryConsumer, remote_exec_enabled
+
+            if remote_exec_enabled() and connected_count > 0:
+                self._verxio_delivery_consumer = DeliveryConsumer(self)
+                _deliver_task = asyncio.create_task(
+                    self._verxio_delivery_consumer.run(), name="verxio-delivery-consumer"
+                )
+                self._background_tasks.add(_deliver_task)
+                _deliver_task.add_done_callback(self._background_tasks.discard)
+                logger.info("Verxio remote exec: delivery consumer started")
+        except Exception:
+            logger.warning("Verxio delivery consumer failed to start", exc_info=True)
+        try:
+            from gateway import verxio_channel_shard
+
+            if verxio_channel_shard.writeback_enabled():
+                _shard_task = asyncio.create_task(
+                    verxio_channel_shard.watch(self), name="verxio-channel-shard-watch"
+                )
+                self._background_tasks.add(_shard_task)
+                _shard_task.add_done_callback(self._background_tasks.discard)
+        except Exception:
+            logger.warning("Verxio channel shard watch failed to start", exc_info=True)
 
         if connected_count == 0:
             if startup_nonretryable_errors:
@@ -7035,6 +7079,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 _amap.clear()
             if hasattr(self, "_profile_adapters"):
                 self._profile_adapters.clear()
+            _consumer = getattr(self, "_verxio_delivery_consumer", None)
+            if _consumer is not None:
+                try:
+                    _consumer.stop()
+                except Exception:
+                    pass
             logger.info(
                 "Shutdown phase: all adapters disconnected at +%.2fs",
                 _phase_elapsed(),
@@ -15065,6 +15115,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         from hermes_cli.profiles import get_active_profile_name, get_profile_dir
         try:
             name = (source.profile or "").strip() or get_active_profile_name() or "default"
+            # Hot-attached Verxio tenants are not on-disk profiles.
+            try:
+                from hermes_cli.dynamic_profiles import get_dynamic_home
+
+                dynamic_home = get_dynamic_home(name)
+            except Exception:
+                dynamic_home = None
+            if dynamic_home is not None:
+                return dynamic_home
             return get_profile_dir(name)
         except Exception:
             from hermes_constants import get_hermes_home
