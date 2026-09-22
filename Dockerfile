@@ -136,8 +136,13 @@ ENV npm_config_install_links=false \
     npm_config_update_notifier=false \
     NO_UPDATE_NOTIFIER=1
 
+# HERMES_INSTALL_BROWSER=0 builds the slim Verxio hosted image: on the worker
+# pool Chromium lives on the sandbox hosts (deploy/sandbox), not in Hermes.
+ARG HERMES_INSTALL_BROWSER=1
 RUN npm install --prefer-offline --no-audit --no-fund && \
-    npx playwright install --with-deps chromium --only-shell && \
+    if [ "$HERMES_INSTALL_BROWSER" = "1" ]; then \
+        npx playwright install --with-deps chromium --only-shell; \
+    fi && \
     rm -rf /root/.npm
 
 # ---------- Layer-cached Python dependency install ----------

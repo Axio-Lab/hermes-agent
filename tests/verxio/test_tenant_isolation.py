@@ -168,3 +168,18 @@ def test_verxio_cron_provider_publishes_tenant_jobs(tmp_path, monkeypatch):
     assert [j["id"] for j in jobs] == ["a"]  # completed one-shots are not republished
     assert "secret_field" not in jobs[0]
     assert jobs[0]["origin"] == {"platform": "telegram", "chat_id": "42"}
+
+
+def test_channel_shard_index_falls_back_to_pod_ordinal(monkeypatch):
+    from gateway import verxio_channel_shard as shard
+
+    monkeypatch.delenv("VERXIO_CHANNEL_SHARD", raising=False)
+    monkeypatch.setenv("VERXIO_POD_NAME", "verxio-channel-gateway-3")
+    assert shard.shard_index() == 3
+
+    monkeypatch.setenv("VERXIO_CHANNEL_SHARD", "1")
+    assert shard.shard_index() == 1
+
+    monkeypatch.delenv("VERXIO_CHANNEL_SHARD", raising=False)
+    monkeypatch.setenv("VERXIO_POD_NAME", "not-a-statefulset-pod")
+    assert shard.shard_index() is None

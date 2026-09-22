@@ -1,6 +1,16 @@
-# Slim hosted worker/channel image. Chromium lives on sandbox hosts, not here.
-FROM verxio-hermes-runtime:local
-ENV VERXIO_HOSTED=1
-ENV HERMES_DISABLE_LAZY_INSTALLS=1
-# Browser/Playwright stay unused; sandbox image owns Chromium.
+# Slim hosted worker/channel image for the Verxio pool.
+#
+# Build the base without a browser first, then layer the hosted defaults:
+#   docker build --build-arg HERMES_INSTALL_BROWSER=0 -t verxio-hermes-base:slim .
+#   docker build -f Dockerfile.verxio-hosted --build-arg BASE=verxio-hermes-base:slim \
+#       -t verxio-hermes-hosted:local .
+# Chromium and per-run tool execution live on the sandbox hosts (deploy/sandbox).
+ARG BASE=verxio-hermes-runtime:local
+FROM ${BASE}
+ENV VERXIO_HOSTED=1 \
+    HERMES_DISABLE_LAZY_INSTALLS=1 \
+    HERMES_SKIP_BROWSER_INSTALL=1
+# Hosted policy forces terminal.backend=docker against DOCKER_HOST; the local
+# docker-cli stays (it is the client for the remote TLS daemon), but no socket
+# is ever mounted into this image.
 CMD ["gateway", "run"]

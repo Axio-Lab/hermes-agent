@@ -43,9 +43,19 @@ _WRITEBACK_STATE: Dict[str, str] = {}
 
 
 def shard_index() -> Optional[int]:
+    """Shard ordinal for this process.
+
+    ``VERXIO_CHANNEL_SHARD`` wins. Otherwise, when running as a Kubernetes
+    StatefulSet pod, derive it from the pod name's trailing ordinal
+    (``VERXIO_POD_NAME=verxio-channel-gateway-3`` -> ``3``) so the image's
+    s6 entrypoint does not need a shell wrapper.
+    """
     raw = os.getenv("VERXIO_CHANNEL_SHARD", "").strip()
     if raw == "":
-        return None
+        pod = os.getenv("VERXIO_POD_NAME", "").strip()
+        if "-" not in pod:
+            return None
+        raw = pod.rsplit("-", 1)[1]
     try:
         return int(raw)
     except ValueError:
