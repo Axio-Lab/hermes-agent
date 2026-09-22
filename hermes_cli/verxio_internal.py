@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, FastAPI, Header, HTTPException, Request
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
@@ -83,10 +84,25 @@ class TenantScopeMiddleware(BaseHTTPMiddleware):
             if home is not None:
                 from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
+                # Same two seams as gateway._profile_runtime_scope: the tenant's
+                # home for config/skills/sessions AND its .env as the only
+                # credential source, so oneshot/model calls never read a
+                # neighbour's keys from the worker process environment.
+                secret_token = None
                 token = set_hermes_home_override(str(home))
+                try:
+                    from agent.secret_scope import build_profile_secret_scope, set_secret_scope
+
+                    secret_token = set_secret_scope(build_profile_secret_scope(Path(home)))
+                except Exception:
+                    logger.debug("secret scope unavailable for tenant %s", tenant, exc_info=True)
                 try:
                     response = await call_next(request)
                 finally:
+                    if secret_token is not None:
+                        from agent.secret_scope import reset_secret_scope
+
+                        reset_secret_scope(secret_token)
                     reset_hermes_home_override(token)
                 if prefix:
                     response.headers["X-Hermes-Profile"] = tenant

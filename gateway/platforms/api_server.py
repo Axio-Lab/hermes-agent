@@ -32,6 +32,7 @@ Requires:
 """
 
 import asyncio
+import contextvars
 import hashlib
 import hmac
 import json
@@ -3839,6 +3840,34 @@ class APIServerAdapter(BasePlatformAdapter):
         self._run_statuses[run_id] = current
         return current
 
+    @staticmethod
+    def _resolve_run_profile_home(name: str) -> Optional[Path]:
+        """Home for a profile-scoped ``/v1/runs`` request.
+
+        Hot-attached Verxio tenants (``hermes_cli.dynamic_profiles``) win over
+        on-disk profiles. Returns ``None`` when the profile is unknown so the
+        caller can fail closed instead of running against the process home.
+        """
+        cleaned = (name or "").strip()
+        if not cleaned:
+            return None
+        try:
+            from hermes_cli.dynamic_profiles import get_dynamic_home
+
+            home = get_dynamic_home(cleaned)
+            if home is not None:
+                return Path(home)
+        except Exception:
+            pass
+        try:
+            from hermes_cli.profiles import get_profile_dir, profile_exists
+
+            if profile_exists(cleaned):
+                return Path(get_profile_dir(cleaned))
+        except Exception:
+            pass
+        return None
+
     def _make_run_event_callback(self, run_id: str, loop: "asyncio.AbstractEventLoop"):
         """Return a tool_progress_callback that pushes structured events to the run's SSE queue."""
         def _push(event: Dict[str, Any]) -> None:
@@ -3962,6 +3991,19 @@ class APIServerAdapter(BasePlatformAdapter):
                         )
                     conversation_history.append({"role": msg["role"], "content": str(content)})
 
+        # Profile-scoped runs (Verxio worker pool). A named profile must resolve
+        # to a known home; never fall back to the process home for a tenant.
+        requested_profile = str(
+            body.get("profile") or request.headers.get("X-Hermes-Profile") or ""
+        ).strip()
+        profile_home = None
+        if requested_profile:
+            profile_home = self._resolve_run_profile_home(requested_profile)
+            if profile_home is None:
+                return web.json_response(
+                    _openai_error(f"Unknown profile '{requested_profile}'"), status=404
+                )
+
         run_id = f"run_{uuid.uuid4().hex}"
         session_id = body.get("session_id") or stored_session_id or run_id
         approval_session_key = gateway_session_key or session_id or run_id
@@ -3995,9 +4037,19 @@ class APIServerAdapter(BasePlatformAdapter):
             created_at=created_at,
             session_id=session_id,
             model=body.get("model", self._model_name),
+            profile=requested_profile or None,
         )
 
         async def _run_and_close():
+            if profile_home is None:
+                await _run_and_close_inner()
+                return
+            from gateway.run import _profile_runtime_scope
+
+            with _profile_runtime_scope(profile_home):
+                await _run_and_close_inner()
+
+        async def _run_and_close_inner():
             try:
                 self._set_run_status(run_id, "running")
                 agent = self._create_agent(
@@ -4082,7 +4134,11 @@ class APIServerAdapter(BasePlatformAdapter):
                     }
                     return r, u
 
-                result, usage = await asyncio.get_running_loop().run_in_executor(None, _run_sync)
+                # copy_context keeps the profile home/secret scope (contextvars)
+                # visible inside the worker thread; run_in_executor alone drops it.
+                result, usage = await asyncio.get_running_loop().run_in_executor(
+                    None, contextvars.copy_context().run, _run_sync
+                )
                 # Check for structured failure (non-retryable client errors like
                 # 401/400 return failed=True instead of raising, so the except
                 # block below never fires — issue #15561).
