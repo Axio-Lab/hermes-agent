@@ -1265,6 +1265,12 @@ def _create_environment(env_type: str, image: str, cwd: str, timeout: int,
         # subagents, RL benchmarks) don't run the reaper N times.
         # Disable via ``terminal.docker_orphan_reaper: false`` (issue #20561).
         _maybe_reap_docker_orphans(cc)
+        # Verxio hosted workers: hardened per-tenant container on a remote
+        # sandbox daemon with copy-in/copy-out workspace (no host mounts).
+        from tools.environments.verxio_sandbox import create_sandbox_environment, hosted_sandbox_enabled
+
+        if hosted_sandbox_enabled():
+            return create_sandbox_environment(image=image, timeout=timeout, container_config=cc)
         return _DockerEnvironment(
             image=image, cwd=cwd, timeout=timeout,
             cpu=cpu, memory=memory, disk=disk,
