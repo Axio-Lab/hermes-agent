@@ -103,3 +103,68 @@ def test_sandbox_environment_workspace_mirror(tmp_path):
         from agent.secret_scope import reset_secret_scope
 
         reset_secret_scope(token)
+
+
+def test_cron_store_follows_tenant_home_override(tmp_path, monkeypatch):
+    from cron import jobs as cron_jobs
+
+    tenant_home = tmp_path / "tenant_c"
+    token = set_hermes_home_override(str(tenant_home))
+    try:
+        assert cron_jobs._jobs_file() == tenant_home / "cron" / "jobs.json"
+        cron_jobs.save_jobs([{"id": "j1", "name": "daily", "schedule": {"kind": "cron", "expr": "0 9 * * *"}}])
+        assert (tenant_home / "cron" / "jobs.json").is_file()
+        assert [j["id"] for j in cron_jobs.load_jobs()] == ["j1"]
+    finally:
+        reset_hermes_home_override(token)
+    # Without the override the module-level path is untouched.
+    assert cron_jobs._jobs_file() == cron_jobs.JOBS_FILE
+    assert not (Path(cron_jobs.JOBS_FILE).exists() and "tenant_c" in str(cron_jobs.JOBS_FILE))
+
+
+def test_verxio_cron_provider_publishes_tenant_jobs(tmp_path, monkeypatch):
+    import importlib
+
+    provider = importlib.import_module("plugins.cron.verxio")
+    from agent.secret_scope import reset_secret_scope, set_secret_scope
+
+    home = tmp_path / "tenant_d"
+    (home / "cron").mkdir(parents=True)
+    (home / "cron" / "jobs.json").write_text(
+        '{"jobs": [{"id": "a", "name": "n", "schedule": {"kind": "interval", "minutes": 5}, "prompt": "hi", '
+        '"deliver": "origin", "origin": {"platform": "telegram", "chat_id": "42"}, "secret_field": "x"}, '
+        '{"id": "b", "name": "done", "state": "completed", "schedule": {"kind": "once", "run_at": "2020-01-01T00:00:00+00:00"}}]}'
+    )
+    posted: dict = {}
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        posted.update({"url": url, "json": json, "headers": headers})
+        return _Resp()
+
+    monkeypatch.setattr(provider.httpx, "post", fake_post)
+    monkeypatch.delenv("VERXIO_API_URL", raising=False)
+    scope = set_secret_scope(
+        {
+            "VERXIO_API_URL": "http://api.test",
+            "VERXIO_RUNTIME_TOKEN": "tok",
+            "VERXIO_WORKSPACE_ID": "ws",
+            "VERXIO_AGENT_ID": "ag",
+        }
+    )
+    home_token = set_hermes_home_override(str(home))
+    try:
+        assert provider.VerxioCronScheduler().publish() is True
+    finally:
+        reset_hermes_home_override(home_token)
+        reset_secret_scope(scope)
+    assert posted["url"] == "http://api.test/api/runtime/cron"
+    assert posted["headers"]["Authorization"] == "Bearer tok"
+    assert posted["json"]["workspace_id"] == "ws" and posted["json"]["agent_id"] == "ag"
+    jobs = posted["json"]["jobs"]
+    assert [j["id"] for j in jobs] == ["a"]  # completed one-shots are not republished
+    assert "secret_field" not in jobs[0]
+    assert jobs[0]["origin"] == {"platform": "telegram", "chat_id": "42"}
