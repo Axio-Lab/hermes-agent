@@ -50,8 +50,29 @@ def sandbox_daemon_config() -> dict[str, str]:
     return {"host": host, "tls": "1", "cert_path": cert_path}
 
 
+def local_fallback_allowed() -> bool:
+    """Whether a hosted runtime without a sandbox daemon may run tools in-process.
+
+    Single-tenant planes (per-tenant k8s pod / local docker) have no sandbox
+    hosts, so they set ``VERXIO_SANDBOX_FALLBACK_LOCAL=1``. Pool workers leave
+    it unset and fail closed: one tenant's build must never run next to the
+    other tenants on that worker.
+    """
+    return os.getenv("VERXIO_SANDBOX_FALLBACK_LOCAL", "").strip() in {"1", "true", "yes", "on"}
+
+
+_FALLBACK_WARNED = False
+
+
 def apply_hosted_tool_policy(config: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Mutate Hermes config so dangerous tools cannot touch the worker host."""
+    """Mutate Hermes config so dangerous tools cannot touch the worker host.
+
+    Raises :class:`SandboxPolicyError` when the sandbox daemon is misconfigured
+    and local fallback is not allowed. Callers must not swallow that into a
+    plain unpoliced config — that is how tenant ``npm ci`` ended up sharing a
+    CPU budget with the dashboard and knocked ``/api/healthz`` offline.
+    """
+    global _FALLBACK_WARNED
     cfg = dict(config or {})
     if not hosted_mode():
         return cfg
@@ -63,16 +84,35 @@ def apply_hosted_tool_policy(config: dict[str, Any] | None = None) -> dict[str, 
     # turn is enqueued to the pool — so they don't need a sandbox daemon.
     remote_exec = os.getenv("VERXIO_REMOTE_EXEC", "").strip() in {"1", "true", "yes", "on"}
     if terminal["backend"] == "docker" and not remote_exec:
-        daemon = sandbox_daemon_config()
-        docker_cfg["host"] = daemon["host"]
-        docker_cfg["tls_verify"] = daemon["tls"] == "1"
-        if daemon["cert_path"]:
-            docker_cfg["cert_path"] = daemon["cert_path"]
-        # Copy-in/copy-out sandbox: never mount host paths, never persist.
-        docker_cfg["mount_cwd"] = False
-        docker_cfg["volumes"] = []
-        docker_cfg["run_as_host_user"] = False
-        docker_cfg["persist_across_processes"] = True
+        try:
+            daemon = sandbox_daemon_config()
+        except SandboxPolicyError as exc:
+            if not local_fallback_allowed():
+                raise
+            # Isolated local terminal: same container, but every tool child
+            # runs at low priority (tools/environments/priority.py) and stays
+            # inside the tenant workspace. Warn once so operators see it.
+            if not _FALLBACK_WARNED:
+                logger.warning(
+                    "Hosted sandbox daemon unavailable (%s); running tools locally "
+                    "at low priority (VERXIO_SANDBOX_FALLBACK_LOCAL=1)",
+                    exc,
+                )
+                _FALLBACK_WARNED = True
+            terminal["backend"] = "local"
+            os.environ.setdefault("HERMES_TOOL_NICE", "10")
+            os.environ.setdefault("HERMES_TOOL_SCHED_BATCH", "1")
+            daemon = None
+        if daemon is not None:
+            docker_cfg["host"] = daemon["host"]
+            docker_cfg["tls_verify"] = daemon["tls"] == "1"
+            if daemon["cert_path"]:
+                docker_cfg["cert_path"] = daemon["cert_path"]
+            # Copy-in/copy-out sandbox: never mount host paths, never persist.
+            docker_cfg["mount_cwd"] = False
+            docker_cfg["volumes"] = []
+            docker_cfg["run_as_host_user"] = False
+            docker_cfg["persist_across_processes"] = True
     docker_cfg.setdefault("image", os.getenv("VERXIO_SANDBOX_IMAGE", "verxio-sandbox:local"))
     docker_cfg.setdefault("network", os.getenv("VERXIO_SANDBOX_NETWORK", "none"))
     terminal["docker"] = docker_cfg

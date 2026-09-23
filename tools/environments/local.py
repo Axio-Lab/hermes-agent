@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 from tools.environments.base import BaseEnvironment, _pipe_stdin
+from tools.environments.priority import tool_preexec_fn
 from hermes_cli._subprocess_compat import windows_hide_flags
 
 _IS_WINDOWS = platform.system() == "Windows"
@@ -740,7 +741,9 @@ class LocalEnvironment(BaseEnvironment):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
-            preexec_fn=None if _IS_WINDOWS else os.setsid,
+            # Own process group + low CPU priority so builds never starve the
+            # dashboard/gateway sharing this container (see priority.py).
+            preexec_fn=tool_preexec_fn(),
             cwd=_popen_cwd,
             **_popen_kwargs,
         )

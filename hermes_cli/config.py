@@ -5723,13 +5723,24 @@ def load_config() -> Dict[str, Any]:
     """
     cfg = _load_config_impl(want_deepcopy=True)
     try:
-        from hermes_cli.verxio_hosted_policy import apply_hosted_tool_policy, hosted_mode
-
-        if hosted_mode():
-            return apply_hosted_tool_policy(cfg)
+        from hermes_cli.verxio_hosted_policy import (
+            SandboxPolicyError,
+            apply_hosted_tool_policy,
+            hosted_mode,
+        )
     except Exception:
-        pass
-    return cfg
+        return cfg
+    if not hosted_mode():
+        return cfg
+    try:
+        return apply_hosted_tool_policy(cfg)
+    except SandboxPolicyError:
+        # Fail closed. Returning the unpoliced config here used to let a
+        # misconfigured pool worker run tenant shells on the worker host.
+        raise
+    except Exception:
+        logger.warning("Hosted tool policy could not be applied; using base config", exc_info=True)
+        return cfg
 
 
 def config_for_editor() -> Dict[str, Any]:

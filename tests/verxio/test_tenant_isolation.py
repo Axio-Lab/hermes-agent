@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -77,6 +78,70 @@ def test_hosted_policy_rejects_local_socket_and_plaintext(monkeypatch):
     monkeypatch.delenv("DOCKER_HOST", raising=False)
     monkeypatch.setenv("VERXIO_REMOTE_EXEC", "1")
     assert apply_hosted_tool_policy({})["terminal"]["backend"] == "docker"
+
+
+def test_hosted_policy_local_fallback_keeps_isolation(monkeypatch):
+    """No sandbox daemon + explicit fallback → local terminal at low priority.
+
+    The rest of the hosted policy (workspace root, deny_host_fs) must survive;
+    previously a missing DOCKER_HOST dropped the entire policy.
+    """
+    import hermes_cli.verxio_hosted_policy as policy
+    from tools.environments.priority import tool_nice_level, tool_sched_batch
+
+    monkeypatch.setenv("VERXIO_HOSTED", "1")
+    monkeypatch.setenv("VERXIO_SANDBOX_FALLBACK_LOCAL", "1")
+    monkeypatch.delenv("VERXIO_REMOTE_EXEC", raising=False)
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    monkeypatch.delenv("HERMES_TOOL_NICE", raising=False)
+    monkeypatch.delenv("HERMES_TOOL_SCHED_BATCH", raising=False)
+    monkeypatch.setenv("TERMINAL_CWD", "/workspace")
+    monkeypatch.setattr(policy, "_FALLBACK_WARNED", False)
+
+    cfg = apply_hosted_tool_policy({"terminal": {"backend": "docker"}})
+
+    assert cfg["terminal"]["backend"] == "local"
+    assert cfg["security"]["deny_host_fs"] is True
+    assert cfg["security"]["workspace_root"] == "/workspace"
+    assert tool_nice_level() == 10
+    assert tool_sched_batch() is True
+
+    # Without the explicit opt-in the policy still fails closed.
+    monkeypatch.delenv("VERXIO_SANDBOX_FALLBACK_LOCAL", raising=False)
+    with pytest.raises(policy.SandboxPolicyError):
+        apply_hosted_tool_policy({"terminal": {"backend": "docker"}})
+
+
+def test_tool_preexec_lowers_priority(monkeypatch):
+    """Tool children drop to a higher nice value in hosted mode."""
+    import subprocess
+    import sys
+
+    from tools.environments.priority import tool_preexec_fn
+
+    if sys.platform == "win32":
+        pytest.skip("preexec_fn is POSIX-only")
+    monkeypatch.setenv("VERXIO_HOSTED", "1")
+    monkeypatch.delenv("HERMES_TOOL_NICE", raising=False)
+    out = subprocess.run(
+        [sys.executable, "-c", "import os; print(os.nice(0))"],
+        capture_output=True,
+        text=True,
+        preexec_fn=tool_preexec_fn(),
+        check=True,
+    )
+    assert int(out.stdout.strip()) >= 10
+
+    monkeypatch.setenv("HERMES_TOOL_NICE", "0")
+    monkeypatch.setenv("HERMES_TOOL_SCHED_BATCH", "0")
+    out = subprocess.run(
+        [sys.executable, "-c", "import os; print(os.nice(0))"],
+        capture_output=True,
+        text=True,
+        preexec_fn=tool_preexec_fn(),
+        check=True,
+    )
+    assert int(out.stdout.strip()) == os.nice(0)
 
 
 def test_sandbox_environment_workspace_mirror(tmp_path):
