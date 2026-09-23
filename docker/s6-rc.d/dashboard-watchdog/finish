@@ -1,0 +1,17 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+# Watchdog finish script. Mirrors ../dashboard/finish: when the dashboard
+# is disabled the run script exits 0 and we return 125 so s6-supervise
+# marks the slot permanently down instead of respawning in a loop.
+
+case "${HERMES_DASHBOARD:-}" in
+    1|true|TRUE|True|yes|YES|Yes)
+        case "${HERMES_DASHBOARD_WATCHDOG:-1}" in
+            0|false|FALSE|False|no|NO|No) exit 125 ;;
+        esac
+        exit 0
+        ;;
+    *)
+        exit 125
+        ;;
+esac

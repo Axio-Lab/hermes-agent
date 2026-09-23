@@ -1,0 +1,88 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+# Dashboard watchdog. Companion to ../dashboard.
+#
+# The dashboard is one asyncio loop. When it stops answering
+# /api/healthz (event loop wedged, accept queue full) s6 still sees a
+# live PID and does nothing, Kubernetes marks the pod unready and — with
+# no liveness probe on a bare Pod — also does nothing. Users sat on
+# "Reconnecting to Verxio" for hours. This loop restarts the *dashboard
+# service only* (agent turns keep running) as soon as it is provably
+# wedged, and escalates to SIGKILL if a graceful restart does not take.
+#
+# Two failure shapes are treated differently:
+#   • connection refused (curl rc 7): the process is booting or s6 is
+#     already restarting it. Tolerated for HERMES_DASHBOARD_WATCHDOG_BOOT_GRACE
+#     seconds, then killed so a hung import/skills sync cannot pin the
+#     slot forever.
+#   • listening but timing out / non-200 (rc 28 or bad status): wedged.
+#     HERMES_DASHBOARD_WATCHDOG_FAILURES consecutive probes → restart.
+#
+# Runs as root so `s6-svc` can reach the supervise control FIFO.
+
+case "${HERMES_DASHBOARD:-}" in
+    1|true|TRUE|True|yes|YES|Yes) ;;
+    *) exit 0 ;;  # finish script exits 125 → slot stays down
+esac
+
+case "${HERMES_DASHBOARD_WATCHDOG:-1}" in
+    0|false|FALSE|False|no|NO|No) exit 0 ;;
+esac
+
+port="${HERMES_DASHBOARD_PORT:-9119}"
+interval="${HERMES_DASHBOARD_WATCHDOG_INTERVAL:-5}"
+probe_timeout="${HERMES_DASHBOARD_WATCHDOG_TIMEOUT:-5}"
+max_fail="${HERMES_DASHBOARD_WATCHDOG_FAILURES:-6}"
+boot_grace="${HERMES_DASHBOARD_WATCHDOG_BOOT_GRACE:-900}"
+svc=/run/service/dashboard
+url="http://127.0.0.1:${port}/api/healthz"
+
+log() { echo "[dashboard-watchdog] $*" >&2; }
+
+fails=0
+escalated=0
+refused_since=""
+
+# Let the dashboard come up before the first probe.
+sleep "${HERMES_DASHBOARD_WATCHDOG_INITIAL_DELAY:-20}"
+
+while :; do
+    code="$(curl -s -o /dev/null -m "$probe_timeout" -w '%{http_code}' "$url" 2>/dev/null)"
+    rc=$?
+    now="$(date +%s)"
+
+    if [ "$rc" -eq 0 ] && [ "$code" = "200" ]; then
+        if [ "$fails" -gt 0 ] || [ -n "$refused_since" ]; then
+            log "dashboard healthy again"
+        fi
+        fails=0
+        escalated=0
+        refused_since=""
+    elif [ "$rc" -eq 7 ]; then
+        # Not listening yet: booting or mid-restart.
+        fails=0
+        [ -n "$refused_since" ] || refused_since="$now"
+        if [ $((now - refused_since)) -ge "$boot_grace" ]; then
+            log "dashboard not listening for ${boot_grace}s; killing so s6 restarts it"
+            s6-svc -k "$svc" 2>/dev/null || true
+            refused_since=""
+        fi
+    else
+        refused_since=""
+        fails=$((fails + 1))
+        log "healthz probe failed (rc=${rc} http=${code:-none}) ${fails}/${max_fail}"
+        if [ "$fails" -ge "$max_fail" ]; then
+            if [ "$escalated" -eq 0 ]; then
+                log "dashboard wedged; requesting restart (SIGTERM)"
+                s6-svc -r "$svc" 2>/dev/null || s6-svc -t "$svc" 2>/dev/null || true
+                escalated=1
+            else
+                log "dashboard still wedged after SIGTERM; SIGKILL"
+                s6-svc -k "$svc" 2>/dev/null || true
+                escalated=0
+            fi
+            fails=0
+        fi
+    fi
+    sleep "$interval"
+done

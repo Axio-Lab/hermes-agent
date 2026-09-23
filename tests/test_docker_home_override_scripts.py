@@ -5,6 +5,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DASHBOARD_RUN = REPO_ROOT / "docker" / "s6-rc.d" / "dashboard" / "run"
+WATCHDOG_DIR = REPO_ROOT / "docker" / "s6-rc.d" / "dashboard-watchdog"
 MAIN_WRAPPER = REPO_ROOT / "docker" / "main-wrapper.sh"
 STAGE2_HOOK = REPO_ROOT / "docker" / "stage2-hook.sh"
 
@@ -78,6 +79,32 @@ def test_dashboard_run_does_not_derive_insecure_from_bind_host() -> None:
         assert truthy in text, (
             f"HERMES_DASHBOARD_INSECURE should accept truthy value {truthy!r}"
         )
+
+
+def test_dashboard_watchdog_service_is_wired_and_restarts_only_the_dashboard() -> None:
+    """The watchdog must be a real s6 longrun in the ``user`` bundle, gated on
+    HERMES_DASHBOARD like the dashboard itself, and must only ever act on the
+    dashboard service (never the container) so agent turns survive a heal.
+    """
+    run = (WATCHDOG_DIR / "run").read_text(encoding="utf-8")
+    finish = (WATCHDOG_DIR / "finish").read_text(encoding="utf-8")
+
+    assert (WATCHDOG_DIR / "type").read_text(encoding="utf-8").strip() == "longrun"
+    assert (WATCHDOG_DIR / "dependencies.d" / "dashboard").exists()
+    assert (REPO_ROOT / "docker" / "s6-rc.d" / "user" / "contents.d" / "dashboard-watchdog").exists()
+
+    assert "#!/command/with-contenv sh" in run
+    assert "/api/healthz" in run
+    assert 'svc=/run/service/dashboard' in run
+    assert 's6-svc -r "$svc"' in run and 's6-svc -k "$svc"' in run
+    # Never escalate to the whole container from inside the image.
+    for forbidden in ("s6-svscanctl", "kill 1", "halt", "reboot"):
+        assert forbidden not in run
+    # Booting (connection refused) is distinguished from a wedge (timeout).
+    assert '"$rc" -eq 7' in run
+    assert "HERMES_DASHBOARD_WATCHDOG_BOOT_GRACE" in run
+    # Same disabled semantics as the dashboard slot.
+    assert "exit 125" in finish
 
 
 def test_stage2_hook_repairs_profiles_and_cron_ownership_on_every_boot() -> None:
