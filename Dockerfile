@@ -219,6 +219,16 @@ RUN uv pip install --no-cache-dir --no-deps -e "."
 # /opt/data instead. Root can still repair the image during build/boot, but
 # supervised Hermes processes drop to the non-root hermes user.
 USER root
+# Precompile bytecode for the whole install tree. PYTHONDONTWRITEBYTECODE=1
+# plus a read-only /opt/hermes meant every boot re-compiled ~3k modules from
+# source (uv does not compile on sync); under CPU contention that was
+# minutes before the dashboard could bind :9119. unchecked-hash pycs skip
+# the source stat/hash entirely, which is safe because the tree is immutable
+# after the chmod below.
+RUN /opt/hermes/.venv/bin/python -m compileall -q -j 0 \
+        --invalidation-mode unchecked-hash \
+        -x '/(node_modules|web|ui-tui|\.git|tests)/' \
+        /opt/hermes/.venv/lib /opt/hermes >/dev/null
 RUN mkdir -p /opt/hermes/bin && \
     cp /opt/hermes/docker/hermes-exec-shim.sh /opt/hermes/bin/hermes && \
     chmod 0755 /opt/hermes/bin/hermes && \

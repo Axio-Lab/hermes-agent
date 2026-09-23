@@ -2177,6 +2177,19 @@ def _sync_bundled_skills_quietly() -> None:
         pass
 
 
+def _dashboard_defers_skills_sync() -> bool:
+    """Run the bundled-skills sync in the background instead of before bind.
+
+    ``HERMES_DASHBOARD_BACKGROUND_SKILLS_SYNC`` wins when set; otherwise
+    hosted (``VERXIO_HOSTED``) runtimes defer and desktop/CLI keep the
+    synchronous seed so the first skills-picker render is complete.
+    """
+    explicit = os.environ.get("HERMES_DASHBOARD_BACKGROUND_SKILLS_SYNC", "").strip().lower()
+    if explicit:
+        return explicit in {"1", "true", "yes", "on"}
+    return os.environ.get("VERXIO_HOSTED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _resolve_use_tui(args) -> bool:
     """Decide whether to launch the TUI for a chat/bare invocation.
 
@@ -11363,7 +11376,19 @@ def cmd_dashboard(args):
     # skills picker / agent skill discovery sees the bundled library.
     # cmd_chat does this in its own pre-dispatch block; the dashboard
     # backend is the desktop's primary entrypoint and needs the same.
-    _sync_bundled_skills_quietly()
+    #
+    # Hosted runtimes run it off the critical path: the sync MD5s the whole
+    # bundled tree (~100 MB) and on a CPU-starved pod that alone held
+    # /api/healthz dark for minutes. Skills are an enhancement; the port must
+    # open first.
+    if _dashboard_defers_skills_sync():
+        threading.Thread(
+            target=_sync_bundled_skills_quietly,
+            name="dashboard-skills-sync",
+            daemon=True,
+        ).start()
+    else:
+        _sync_bundled_skills_quietly()
 
     if "HERMES_WEB_DIST" not in os.environ and not getattr(args, "skip_build", False):
         if not _build_web_ui(PROJECT_ROOT / "web", fatal=True):

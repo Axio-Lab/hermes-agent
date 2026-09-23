@@ -1537,6 +1537,15 @@ class PluginManager:
     def _scan_entry_points(self) -> List[PluginManifest]:
         """Check ``importlib.metadata`` for pip-installed plugins."""
         manifests: List[PluginManifest] = []
+        # ``entry_points()`` parses every dist-info in the venv (hundreds in
+        # the container image). Hosted runtimes have a read-only venv, so no
+        # pip plugin can exist there; skip the scan unless explicitly kept.
+        if _env_enabled("HERMES_PLUGINS_SKIP_ENTRY_POINTS") or (
+            _env_enabled("VERXIO_HOSTED")
+            and not _env_enabled("HERMES_PLUGINS_SCAN_ENTRY_POINTS")
+        ):
+            logger.debug("Entry-point plugin scan skipped (hosted / opt-out)")
+            return manifests
         try:
             eps = importlib.metadata.entry_points()
             # Python 3.12+ returns a SelectableGroups; earlier returns dict
