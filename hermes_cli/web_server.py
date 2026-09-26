@@ -9987,6 +9987,12 @@ async def reload_mcp_servers(profile: Optional[str] = None):
 
             shutdown_mcp_servers()
             tools = discover_mcp_tools()
+            try:
+                from tools.registry import invalidate_check_fn_cache
+
+                invalidate_check_fn_cache()
+            except Exception:
+                pass
 
             tui_server = None
             try:
