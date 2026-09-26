@@ -330,11 +330,12 @@ def _apply_picker_hints(rows: list[dict]) -> None:
         )
         row["auth_type"] = auth_type
         row["key_env"] = key_env
-        row["warning"] = (
-            f"paste {key_env} to activate"
-            if auth_type == "api_key" and key_env
-            else f"run `hermes model` to configure ({auth_type})"
-        )
+        if auth_type == "api_key" and key_env:
+            row["warning"] = f"paste {key_env} to activate"
+        elif os.environ.get("VERXIO_DESKTOP") == "1":
+            row["warning"] = "Connect the account in Settings"
+        else:
+            row["warning"] = f"run `hermes model` to configure ({auth_type})"
 
 
 def _reorder_canonical(rows: list[dict]) -> list[dict]:

@@ -8083,3 +8083,51 @@ def test_get_usage_safe_when_active_count_raises(monkeypatch):
     # Field omitted, but the rest of the payload is intact.
     assert "active_subagents" not in usage
     assert usage["model"] == "x"
+
+
+def test_model_switch_rebuilds_session_stuck_on_stale_codex_auth(monkeypatch):
+    """A chat resumed before ChatGPT was connected must still accept /model."""
+    sid = "stuck-codex"
+    session = {
+        "agent": None,
+        "agent_error": "No Codex credentials stored. Run `hermes auth` to authenticate.",
+        "session_key": "sess",
+        "model_override": None,
+    }
+    server._sessions[sid] = session
+    applied = {}
+    started = {}
+
+    def _fake_switch(_sid, live, arg, **_kwargs):
+        applied["arg"] = arg
+        live["model_override"] = {"model": "gpt-5.6-sol", "provider": "openai-codex"}
+        return {"value": "gpt-5.6-sol", "warning": "", "confirm_required": False}
+
+    def _fake_start(build_sid, build_session):
+        started["sid"] = build_sid
+        started["override"] = dict(build_session.get("model_override") or {})
+        build_session["agent_build_started"] = True
+
+    monkeypatch.setattr(server, "_apply_model_switch", _fake_switch)
+    monkeypatch.setattr(server, "_start_agent_build", _fake_start)
+
+    try:
+        resp = server.handle_request(
+            {
+                "id": "1",
+                "method": "slash.exec",
+                "params": {
+                    "session_id": sid,
+                    "command": "/model gpt-5.6-sol --provider openai-codex --session",
+                },
+            }
+        )
+    finally:
+        server._sessions.pop(sid, None)
+
+    assert "error" not in resp
+    assert applied["arg"].startswith("gpt-5.6-sol")
+    assert started["sid"] == sid
+    assert started["override"]["provider"] == "openai-codex"
+    assert session.get("agent_error") is None
+    assert "hermes auth" not in json.dumps(resp)

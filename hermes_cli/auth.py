@@ -714,6 +714,27 @@ def _resolve_zai_base_url(api_key: str, default_url: str, env_override: str) -> 
 CODEX_RATE_LIMITED_CODE = "codex_rate_limited"
 
 
+_DESKTOP_AUTH_HINTS = (
+    ("Run `hermes auth` to authenticate.", "Connect the account in Settings."),
+    ("Run `hermes auth` to re-authenticate.", "Reconnect the account in Settings."),
+    ("Run `hermes model` to re-authenticate.", "Reconnect the account in Settings."),
+    ("Run 'hermes model' to choose a provider and model", "Choose a provider in Settings"),
+    ("run `hermes model` to configure", "connect the account in Settings"),
+    ("Re-authenticate with: hermes auth add nous", "Reconnect Nous in Settings."),
+    ("~/.hermes/.env", "Settings"),
+)
+
+
+def rewrite_desktop_auth_message(message: str) -> str:
+    """Desktop users connect accounts in the app, not with the Hermes CLI."""
+    text = str(message or "")
+    if os.environ.get("VERXIO_DESKTOP") != "1":
+        return text
+    for old, new in _DESKTOP_AUTH_HINTS:
+        text = text.replace(old, new)
+    return text
+
+
 class AuthError(RuntimeError):
     """Structured auth error with UX mapping hints."""
 
@@ -725,7 +746,7 @@ class AuthError(RuntimeError):
         code: Optional[str] = None,
         relogin_required: bool = False,
     ) -> None:
-        super().__init__(message)
+        super().__init__(rewrite_desktop_auth_message(message))
         self.provider = provider
         self.code = code
         self.relogin_required = relogin_required
@@ -778,6 +799,8 @@ def format_auth_error(error: Exception) -> str:
         return str(error)
 
     if error.relogin_required:
+        if os.environ.get("VERXIO_DESKTOP") == "1":
+            return str(error)
         return f"{error} Run `hermes model` to re-authenticate."
 
     if error.code == "subscription_required":

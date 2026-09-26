@@ -991,7 +991,7 @@ def _wait_agent(session: dict, rid: str, timeout: Optional[float] = None) -> dic
     if ready is not None and not ready.wait(timeout=wait_s):
         return _err(rid, 5032, "agent initialization timed out")
     err = session.get("agent_error")
-    return _err(rid, 5032, err) if err else None
+    return _err(rid, 5032, _user_auth_message(str(err))) if err else None
 
 
 def _start_agent_build(sid: str, session: dict) -> None:
@@ -1124,8 +1124,9 @@ def _start_agent_build(sid: str, session: dict) -> None:
             # _schedule_mcp_late_refresh. Cache-safe (pre-first-turn only).
             _schedule_mcp_late_refresh(sid, agent)
         except Exception as e:
-            current["agent_error"] = str(e)
-            _emit("error", sid, {"message": f"agent init failed: {e}"})
+            current["agent_error"] = _user_auth_message(str(e))
+            _stamp_auth_failure(current)
+            _emit("error", sid, {"message": f"agent init failed: {current['agent_error']}"})
         finally:
             if home_token is not None:
                 reset_hermes_home_override(home_token)
@@ -1155,7 +1156,9 @@ def _sess(params, rid):
     s, err = _sess_nowait(params, rid)
     if err:
         return (None, err)
-    _start_agent_build(params.get("session_id") or "", s)
+    sid = params.get("session_id") or ""
+    _retry_agent_if_credentials_changed(sid, s)
+    _start_agent_build(sid, s)
     return (s, _wait_agent(s, rid))
 
 
@@ -1727,13 +1730,120 @@ def _is_missing_provider_auth_error(error: BaseException) -> bool:
         for needle in (
             "no codex credentials stored",
             "no llm provider configured",
+            "no inference provider configured",
             "auth is missing",
             "run `hermes auth`",
             "run hermes auth",
+            "hermes auth",
+            "hermes model",
             "no_provider_configured",
             "re-authenticate",
+            "api key",
+            "api_key",
         )
     )
+
+
+def _credential_material_mtime(session: dict | None = None) -> float:
+    """Newest mtime among the files a provider connect or API key updates."""
+    home = None
+    if session:
+        raw = session.get("profile_home")
+        if raw:
+            home = Path(str(raw))
+    if home is None:
+        try:
+            home = Path(get_hermes_home())
+        except Exception:
+            return 0.0
+    latest = 0.0
+    for name in ("auth.json", "config.yaml", ".env"):
+        try:
+            latest = max(latest, (home / name).stat().st_mtime)
+        except OSError:
+            continue
+    return latest
+
+
+def _stamp_auth_failure(session: dict) -> None:
+    session["agent_error_auth_mtime"] = _credential_material_mtime(session)
+
+
+def _user_auth_message(message: str) -> str:
+    try:
+        from hermes_cli.auth import rewrite_desktop_auth_message
+
+        return rewrite_desktop_auth_message(message)
+    except Exception:
+        return message
+
+
+def _arm_agent_rebuild(sid: str, session: dict) -> None:
+    """Allow another agent build after credentials or the selected model changed."""
+    session.pop("agent_error", None)
+    session.pop("agent_build_started", None)
+    ready = session.get("agent_ready")
+    if ready is None:
+        session["agent_ready"] = threading.Event()
+    else:
+        ready.clear()
+    _start_agent_build(sid, session)
+
+
+def _retry_agent_if_credentials_changed(sid: str, session: dict) -> None:
+    """A resume that failed before the user connected stays stuck on agent_error.
+
+    ChatGPT, Claude, Grok, and API-key saves all touch auth.json, config.yaml,
+    or .env. Rebuild only after one of those files changes, so a still-missing
+    provider does not rebuild on every RPC.
+    """
+    if session.get("agent") is not None:
+        return
+    err = session.get("agent_error")
+    if not err or not _is_missing_provider_auth_error(RuntimeError(str(err))):
+        return
+    mtime = _credential_material_mtime(session)
+    seen = float(session.get("agent_error_auth_mtime") or 0)
+    if mtime <= seen:
+        return
+    session["agent_error_auth_mtime"] = mtime
+    _arm_agent_rebuild(sid, session)
+
+
+def _model_switch_argument(command: str) -> str:
+    text = (command or "").strip()
+    if text.startswith("/"):
+        text = text[1:]
+    parts = text.split(None, 1)
+    if not parts or parts[0].lower() != "model":
+        return ""
+    return parts[1].strip() if len(parts) > 1 else ""
+
+
+def _switch_model_without_agent(rid: str, sid: str, session: dict, arg: str) -> dict:
+    """Apply /model while the live agent is missing, then build it.
+
+    Opening a chat before the account is connected leaves agent=None and a
+    stale auth error. The model the user just picked has to be applied anyway,
+    using the credentials they saved in Settings.
+    """
+    try:
+        result = _apply_model_switch(sid, session, arg)
+    except Exception as exc:
+        return _err(rid, 5001, _user_auth_message(str(exc)))
+    if result.get("confirm_required"):
+        warning = str(result.get("warning") or "")
+        return _ok(
+            rid,
+            {
+                "output": str(result.get("confirm_message") or warning or ""),
+                "warning": warning,
+            },
+        )
+    _arm_agent_rebuild(sid, session)
+    model = str(result.get("value") or "")
+    warning = str(result.get("warning") or "")
+    return _ok(rid, {"output": f"Model switched: {model}", "warning": warning})
 
 
 def _heal_stale_provider_pin_from_auth_error(error: BaseException) -> None:
@@ -5183,7 +5293,7 @@ def _(rid, params: dict) -> dict:
                 if not _is_missing_provider_auth_error(build_err):
                     raise
                 agent = None
-                agent_error = str(build_err)
+                agent_error = _user_auth_message(str(build_err))
                 _heal_stale_provider_pin_from_auth_error(build_err)
                 logger.warning(
                     "session.resume: continuing without agent after auth failure: %s",
@@ -5255,6 +5365,7 @@ def _(rid, params: dict) -> dict:
                 _sessions[sid]["active_session_lease"] = lease
                 if agent_error:
                     _sessions[sid]["agent_error"] = agent_error
+                    _stamp_auth_failure(_sessions[sid])
                     _sessions[sid]["lazy"] = True
         except Exception as e:
             if lease is not None:
@@ -10897,11 +11008,28 @@ def _mirror_slash_side_effects(sid: str, session: dict, command: str) -> str:
 
 @method("slash.exec")
 def _(rid, params: dict) -> dict:
+    cmd = params.get("command", "").strip()
+    # The chat was opened before the account existed. Selecting a model the
+    # user just connected must apply that choice instead of replaying the
+    # stale "run hermes auth" error from the failed resume.
+    pending, pending_err = _sess_nowait(params, rid)
+    model_arg = _model_switch_argument(cmd)
+    if (
+        pending_err is None
+        and pending is not None
+        and model_arg
+        and pending.get("agent") is None
+        and pending.get("agent_error")
+        and _is_missing_provider_auth_error(RuntimeError(str(pending.get("agent_error"))))
+    ):
+        return _switch_model_without_agent(
+            rid, params.get("session_id") or "", pending, model_arg
+        )
+
     session, err = _sess(params, rid)
     if err:
         return err
 
-    cmd = params.get("command", "").strip()
     if not cmd:
         return _err(rid, 4004, "empty command")
 
