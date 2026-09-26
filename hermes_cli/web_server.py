@@ -545,9 +545,29 @@ async def _dashboard_auth_gate(request: Request, call_next):
     return await gated_auth_middleware(request, call_next)
 
 
+def _loopback_cors_headers(request: Request) -> dict[str, str]:
+    """CORS for a response returned before CORSMiddleware can see it.
+
+    Auth runs outside CORSMiddleware, so a 401 or preflight never reaches it.
+    Browsers then report the failure as "Failed to fetch".
+    """
+    origin = request.headers.get("origin", "")
+    if re.fullmatch(r"https?://(localhost|127\.0\.0\.1)(:\d+)?", origin):
+        return {
+            "access-control-allow-origin": origin,
+            "access-control-allow-headers": "*",
+            "access-control-allow-methods": "*",
+            "vary": "Origin",
+        }
+    return {}
+
+
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     """Require the session token on all /api/ routes except the public list."""
+    # Preflight has no session header. Let CORSMiddleware answer it.
+    if request.method == "OPTIONS":
+        return await call_next(request)
     # When the OAuth gate is active, cookie-based auth (gated_auth_middleware
     # above) is authoritative.  The legacy _SESSION_TOKEN path is loopback-only
     # and is skipped here so the gate's session attachment isn't overridden.
@@ -559,6 +579,7 @@ async def auth_middleware(request: Request, call_next):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Unauthorized"},
+                headers=_loopback_cors_headers(request),
             )
     return await call_next(request)
 
