@@ -1542,6 +1542,7 @@ class PluginManager:
         # pip plugin can exist there; skip the scan unless explicitly kept.
         if _env_enabled("HERMES_PLUGINS_SKIP_ENTRY_POINTS") or (
             _env_enabled("VERXIO_HOSTED")
+            and not _env_enabled("VERXIO_DESKTOP")
             and not _env_enabled("HERMES_PLUGINS_SCAN_ENTRY_POINTS")
         ):
             logger.debug("Entry-point plugin scan skipped (hosted / opt-out)")

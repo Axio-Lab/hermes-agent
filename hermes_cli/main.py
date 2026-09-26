@@ -2187,7 +2187,9 @@ def _dashboard_defers_skills_sync() -> bool:
     explicit = os.environ.get("HERMES_DASHBOARD_BACKGROUND_SKILLS_SYNC", "").strip().lower()
     if explicit:
         return explicit in {"1", "true", "yes", "on"}
-    return os.environ.get("VERXIO_HOSTED", "").strip().lower() in {"1", "true", "yes", "on"}
+    from hermes_cli.verxio_hosted_policy import hosted_mode
+
+    return hosted_mode()
 
 
 def _resolve_use_tui(args) -> bool:

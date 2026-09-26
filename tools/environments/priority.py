@@ -37,7 +37,9 @@ def tool_nice_level() -> int:
             return max(0, min(19, int(raw)))
         except ValueError:
             logger.warning("Ignoring invalid HERMES_TOOL_NICE=%r", raw)
-    if _truthy(os.getenv("VERXIO_HOSTED")):
+    from hermes_cli.verxio_hosted_policy import hosted_mode
+
+    if hosted_mode():
         return DEFAULT_HOSTED_NICE
     return 0
 

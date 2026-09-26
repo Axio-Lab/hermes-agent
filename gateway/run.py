@@ -322,7 +322,9 @@ def _redact_approval_command(cmd: "str | None") -> str:
 
 
 def _verxio_hosted() -> bool:
-    return os.getenv("VERXIO_HOSTED", "").strip().lower() in {"1", "true", "yes", "on"}
+    from hermes_cli.verxio_hosted_policy import hosted_mode
+
+    return hosted_mode()
 
 
 _VERXIO_NOISY_STATUS_RE = re.compile(

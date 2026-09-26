@@ -851,7 +851,9 @@ class APIServerAdapter(BasePlatformAdapter):
 
     @staticmethod
     def _hosted_runtime() -> bool:
-        return os.getenv("VERXIO_HOSTED", "").strip().lower() in {"1", "true", "yes", "on"}
+        from hermes_cli.verxio_hosted_policy import hosted_mode
+
+        return hosted_mode()
 
     @classmethod
     def _resolve_listen_host(cls, extra_host: Any, env_host: str | None) -> str:

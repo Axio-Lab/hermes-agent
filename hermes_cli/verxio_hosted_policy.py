@@ -10,8 +10,15 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def desktop_mode() -> bool:
+    """Interactive Verxio Desktop. Hosted sandbox policy must not apply."""
+    return os.getenv("VERXIO_DESKTOP", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def hosted_mode() -> bool:
-    return os.getenv("VERXIO_HOSTED", "").strip() in {"1", "true", "yes", "on"}
+    if desktop_mode():
+        return False
+    return os.getenv("VERXIO_HOSTED", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class SandboxPolicyError(RuntimeError):

@@ -229,7 +229,9 @@ def build_models_payload(
 
 
 def _verxio_hosted() -> bool:
-    return os.getenv("VERXIO_HOSTED", "").strip().lower() in {"1", "true", "yes", "on"}
+    from hermes_cli.verxio_hosted_policy import hosted_mode
+
+    return hosted_mode()
 
 
 def _apply_capabilities(rows: list[dict]) -> None:

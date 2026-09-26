@@ -6675,7 +6675,7 @@ def reload_env() -> int:
         if os.environ.get(key) != value:
             os.environ[key] = value
             count += 1
-    preserve_hosted_env = os.environ.get("VERXIO_HOSTED") == "1"
+    preserve_hosted_env = os.environ.get("VERXIO_HOSTED") == "1" and os.environ.get("VERXIO_DESKTOP") != "1"
     hosted_env_keys = {"DASHSCOPE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"}
     # Remove known Hermes vars that are no longer in .env. Verxio-hosted
     # runtimes inject hosted model credentials as container env rather than

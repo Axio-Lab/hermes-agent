@@ -418,7 +418,9 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     if _effective_hint:
         stable_parts.append(_effective_hint)
 
-    if os.getenv("VERXIO_HOSTED", "").strip().lower() in {"1", "true", "yes", "on"}:
+    from hermes_cli.verxio_hosted_policy import hosted_mode
+
+    if hosted_mode():
         # Credential guidance is session-stable. Live image/video pins are
         # appended per turn in conversation_loop / chat_completion_helpers so
         # Skills → Toolsets switches take effect without a new chat.

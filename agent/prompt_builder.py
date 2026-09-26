@@ -892,7 +892,9 @@ def build_verxio_active_media_status() -> str:
     prompt) so "which image model are you using?" tracks Skills → Toolsets
     switches mid-chat instead of MEMORY preferences or a stale session pin.
     """
-    if os.getenv("VERXIO_HOSTED", "").strip().lower() not in {"1", "true", "yes", "on"}:
+    from hermes_cli.verxio_hosted_policy import hosted_mode
+
+    if not hosted_mode():
         return ""
 
     try:

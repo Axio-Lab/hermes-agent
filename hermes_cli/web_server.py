@@ -5546,7 +5546,9 @@ def _gateway_platform_config(platform_id: str):
 
 
 def _verxio_hosted() -> bool:
-    return os.getenv("VERXIO_HOSTED", "").strip().lower() in {"1", "true", "yes", "on"}
+    from hermes_cli.verxio_hosted_policy import hosted_mode
+
+    return hosted_mode()
 
 
 def _whatsapp_platform_description() -> str:
@@ -8246,7 +8248,9 @@ def _loopback_oauth_needs_manual_paste() -> bool:
         return True
     if os.path.exists("/.dockerenv"):
         return True
-    if os.getenv("VERXIO_HOSTED", "").strip().lower() in {"1", "true", "yes"}:
+    from hermes_cli.verxio_hosted_policy import hosted_mode
+
+    if hosted_mode():
         return True
     return False
 

@@ -41,7 +41,9 @@ _MAX_FILE_BYTES = 256 * 1024 * 1024
 
 
 def hosted_sandbox_enabled() -> bool:
-    return os.getenv("VERXIO_HOSTED", "").strip() in {"1", "true", "yes", "on"}
+    from hermes_cli.verxio_hosted_policy import hosted_mode
+
+    return hosted_mode()
 
 
 def _int_env(name: str, default: int) -> int:
