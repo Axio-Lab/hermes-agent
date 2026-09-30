@@ -3513,6 +3513,36 @@ def run_conversation(
                             _final_response += f"\n\n{_billing_guidance}"
                     else:
                         _final_response = f"API call failed after {max_retries} retries: {_final_summary}"
+                        _stop_like = any(p in _final_summary.lower() for p in (
+                            "no sse events", "broken pipe", "connection error",
+                            "connection lost", "connection reset", "timed out",
+                            "timeout", "readerror",
+                        ))
+                        if _stop_like:
+                            _last_ask = ""
+                            for _msg in reversed(messages):
+                                if _msg.get("role") != "user":
+                                    continue
+                                _text = _msg.get("content")
+                                if isinstance(_text, list):
+                                    _text = " ".join(
+                                        part.get("text", "")
+                                        for part in _text
+                                        if isinstance(part, dict)
+                                    )
+                                _text = str(_text or "").strip()
+                                if _text.startswith("[CONTEXT COMPACTION"):
+                                    continue
+                                _last_ask = _text
+                                break
+                            if len(_last_ask) > 600:
+                                _last_ask = _last_ask[:597].rstrip() + "..."
+                            if _last_ask:
+                                _final_response += (
+                                    "\n\nThis turn stopped before it finished. "
+                                    "Your last instruction was:\n\n"
+                                    f"{_last_ask}"
+                                )
                     if _is_stream_drop:
                         _final_response += (
                             "\n\nThe provider's stream connection keeps "

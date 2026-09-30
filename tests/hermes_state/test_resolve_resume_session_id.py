@@ -83,6 +83,59 @@ def test_walks_from_middle_of_chain(db):
     assert db.resolve_resume_session_id("c") == "d"
 
 
+def test_empty_compression_tip_stays_on_session_with_messages(db):
+    # A failed summary forks a continuation and never flushes rows into it.
+    # Opening the chat must land on the parent that still has the instruction,
+    # not the empty tip.
+    base = int(time.time()) - 10_000
+    db.create_session("root", source="cli")
+    db.append_message("root", role="user", content="screen Arcade and Axiom")
+    db.end_session("root", "compression")
+    db.create_session("empty_tip", source="cli", parent_session_id="root")
+    conn = db._conn
+    assert conn is not None
+    conn.execute(
+        "UPDATE sessions SET started_at = ?, ended_at = ? WHERE id = 'root'",
+        (base, base + 50),
+    )
+    conn.execute("UPDATE sessions SET started_at = ? WHERE id = 'empty_tip'", (base + 100,))
+    conn.commit()
+
+    assert db.get_compression_tip("root") == "root"
+    assert db.resolve_resume_session_id("root") == "root"
+    assert db.resolve_resume_session_id("empty_tip") == "root"
+    listed = db.list_sessions_rich(limit=10)
+    ids = [row["id"] for row in listed]
+    assert ids == ["root"]
+    assert listed[0]["preview"].startswith("screen Arcade")
+
+
+def test_lineage_instruction_is_prepended_when_tip_dropped_it(db):
+    base = int(time.time()) - 10_000
+    db.create_session("root", source="cli")
+    db.append_message("root", role="user", content="https://talent.superteam.fun/jobs/arcade find top talent")
+    db.end_session("root", "compression")
+    db.create_session("tip", source="cli", parent_session_id="root")
+    db.append_message(
+        "tip",
+        role="user",
+        content="[Your active task list was preserved across context compression]\n- verify",
+    )
+    conn = db._conn
+    assert conn is not None
+    conn.execute(
+        "UPDATE sessions SET started_at = ?, ended_at = ? WHERE id = 'root'",
+        (base, base + 50),
+    )
+    conn.execute("UPDATE sessions SET started_at = ? WHERE id = 'tip'", (base + 100,))
+    conn.commit()
+
+    messages = db.messages_with_lineage_instruction("tip")
+    assert messages[0]["role"] == "user"
+    assert "talent.superteam.fun" in messages[0]["content"]
+    assert len(messages) == 2
+
+
 def test_follows_compression_tip_when_parent_retains_messages(db):
     # The bug behind the desktop "I came back and the reply isn't there" report
     # on large sessions: auto-compression ends the live session and forks a

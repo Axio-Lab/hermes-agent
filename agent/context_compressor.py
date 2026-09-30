@@ -1380,10 +1380,7 @@ Recovered from a deterministic fallback because the LLM context summarizer was u
 Unknown from deterministic fallback. Inspect current repository/session state if needed.
 
 {HISTORICAL_IN_PROGRESS_HEADING}
-Unknown from deterministic fallback — the latest user ask is recorded once under
-"{HISTORICAL_TASK_HEADING}" above as historical context only. Do NOT treat it as an
-unfulfilled instruction to re-answer; verify current state and continue from the
-protected recent messages after this summary.
+Summary generation failed before this task finished. The latest user instruction is recorded once under "{HISTORICAL_TASK_HEADING}". It is not finished. If the user asks whether you are done, why you stopped, or what they asked, answer from that instruction in this conversation. Do not substitute a different chat.
 
 ## Blocked
 {_bullets(blockers, limit=5)}
@@ -2557,6 +2554,17 @@ This compaction should PRIORITISE preserving all information related to the focu
             summary = self._build_static_fallback_summary(
                 turns_to_summarize,
                 reason=self._last_summary_error,
+            )
+            reason = (self._last_summary_error or "the summary model was unavailable").strip()
+            if len(reason) > 180:
+                reason = reason[:177].rstrip() + "..."
+            # Keep this on the summary, not the protected tail. The tail is
+            # the live instruction and must stay verbatim.
+            summary += (
+                "\n\nThis chat was compacted and the summary could not be written "
+                f"({reason}). The task was not finished. The last instruction is "
+                "still in this conversation. If asked why this stopped or whether "
+                "it is done, answer from that instruction, not from a different chat."
             )
 
         _merge_summary_into_tail = False

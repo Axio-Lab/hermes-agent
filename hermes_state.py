@@ -2085,22 +2085,82 @@ class SessionDB:
         # Bound the walk defensively — compression chains this deep are
         # pathological and shouldn't happen in practice. 100 = plenty.
         for _ in range(100):
-            with self._lock:
-                cursor = self._conn.execute(
-                    "SELECT id FROM sessions "
-                    "WHERE parent_session_id = ? "
-                    "  AND started_at >= ("
-                    "      SELECT ended_at FROM sessions "
-                    "      WHERE id = ? AND end_reason = 'compression'"
-                    "  ) "
-                    "ORDER BY started_at DESC LIMIT 1",
-                    (current, current),
-                )
-                row = cursor.fetchone()
-            if row is None:
+            children = self._compression_children(current)
+            nxt = None
+            for child_id in children:
+                # An empty continuation (summary failed, nothing flushed) must
+                # not hide the transcript still stored on its parent. Follow
+                # only a child whose own chain actually has messages.
+                if self._compression_chain_has_messages(child_id):
+                    nxt = child_id
+                    break
+            if nxt is None:
                 return current
-            current = row["id"]
+            current = nxt
         return current
+
+    def _nearest_compression_ancestor_with_messages(self, session_id: str) -> Optional[str]:
+        """Nearest compression parent that has messages. Caller holds ``_lock``."""
+        current = session_id
+        seen = set()
+        for _ in range(32):
+            if not current or current in seen:
+                return None
+            seen.add(current)
+            parent = self._conn.execute(
+                "SELECT parent.id AS id FROM sessions child "
+                "JOIN sessions parent ON parent.id = child.parent_session_id "
+                "WHERE child.id = ? AND parent.end_reason = 'compression'",
+                (current,),
+            ).fetchone()
+            if parent is None:
+                return None
+            parent_id = parent["id"]
+            has = self._conn.execute(
+                "SELECT 1 FROM messages WHERE session_id = ? LIMIT 1",
+                (parent_id,),
+            ).fetchone()
+            if has is not None:
+                return parent_id
+            current = parent_id
+        return None
+
+    def _session_has_messages(self, session_id: str) -> bool:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM messages WHERE session_id = ? LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        return row is not None
+
+    def _compression_children(self, session_id: str) -> List[str]:
+        """Compression continuations of ``session_id``, newest first.
+
+        Same discriminator as the tip walk: the parent ended with
+        ``end_reason='compression'`` and the child started at or after that.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id FROM sessions "
+                "WHERE parent_session_id = ? "
+                "  AND started_at >= ("
+                "      SELECT ended_at FROM sessions "
+                "      WHERE id = ? AND end_reason = 'compression'"
+                "  ) "
+                "ORDER BY started_at DESC, id DESC",
+                (session_id, session_id),
+            ).fetchall()
+        return [row["id"] for row in rows]
+
+    def _compression_chain_has_messages(self, session_id: str, depth: int = 0) -> bool:
+        if depth > 32 or not session_id:
+            return False
+        if self._session_has_messages(session_id):
+            return True
+        for child_id in self._compression_children(session_id):
+            if self._compression_chain_has_messages(child_id, depth + 1):
+                return True
+        return False
 
     def list_sessions_rich(
         self,
@@ -2794,6 +2854,71 @@ class SessionDB:
             result.append(msg)
         return result
 
+    @staticmethod
+    def _is_real_user_instruction(content: Any) -> bool:
+        """True for a user message that is an actual ask, not a compaction note."""
+        if not isinstance(content, str):
+            return False
+        text = content.lstrip()
+        if not text:
+            return False
+        return not text.startswith((
+            "[CONTEXT COMPACTION",
+            "[Your active task list",
+        ))
+
+    def messages_with_lineage_instruction(self, session_id: str) -> List[Dict[str, Any]]:
+        """Session messages, with the last real user instruction prepended.
+
+        A compression tip often keeps only the tool tail. The instruction that
+        started the work still lives on a parent. Opening the chat should show
+        that instruction, not only the clicks that followed it.
+        """
+        messages = self.get_messages(session_id)
+        if any(
+            msg.get("role") == "user" and self._is_real_user_instruction(msg.get("content"))
+            for msg in messages
+        ):
+            return messages
+        prior = self._latest_ancestor_user_instruction(session_id)
+        if prior is None:
+            return messages
+        return [prior, *messages]
+
+    def _latest_ancestor_user_instruction(self, session_id: str) -> Optional[Dict[str, Any]]:
+        current = session_id
+        seen = set()
+        best = None
+        for _ in range(32):
+            if not current or current in seen:
+                break
+            seen.add(current)
+            with self._lock:
+                parent = self._conn.execute(
+                    "SELECT parent.id AS id FROM sessions child "
+                    "JOIN sessions parent ON parent.id = child.parent_session_id "
+                    "WHERE child.id = ? AND parent.end_reason = 'compression'",
+                    (current,),
+                ).fetchone()
+                if parent is None:
+                    break
+                parent_id = parent["id"]
+                rows = self._conn.execute(
+                    "SELECT * FROM messages WHERE session_id = ? AND role = 'user' "
+                    "AND active = 1 ORDER BY id DESC",
+                    (parent_id,),
+                ).fetchall()
+            for row in rows:
+                msg = dict(row)
+                if "content" in msg:
+                    msg["content"] = self._decode_content(msg["content"])
+                if self._is_real_user_instruction(msg.get("content")):
+                    if best is None or (msg.get("id") or 0) > (best.get("id") or 0):
+                        best = msg
+                    break
+            current = parent_id
+        return best
+
     def get_messages_around(
         self,
         session_id: str,
@@ -3042,6 +3167,11 @@ class SessionDB:
                 return session_id
             if row is not None:
                 return session_id
+
+            # Empty compression tip: the transcript is still on the parent.
+            ancestor = self._nearest_compression_ancestor_with_messages(session_id)
+            if ancestor:
+                return ancestor
 
             # Walk descendants: at each step, pick the most-recently-started
                 # child session; stop once we find one with messages.

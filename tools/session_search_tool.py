@@ -430,19 +430,29 @@ def _discover(
     # Dedupe by lineage. Keep the raw owning session_id on the surviving
     # row — only that pairs validly with the FTS5 match id for the anchored
     # window. parent_session_id is exposed separately when different.
-    seen_sessions = {}
+    # Hits in the current conversation come first. Compaction can drop the
+    # instruction out of the live context while it is still in this lineage;
+    # skipping those rows is what made "why did you stop?" answer from a
+    # different chat.
+    current_hits = {}
+    other_hits = {}
     for r in raw_results:
         raw_sid = r["session_id"]
         resolved_sid = _resolve_to_parent(db, raw_sid)
-        # Skip the current session lineage
-        if current_lineage_root and resolved_sid == current_lineage_root:
-            continue
-        if current_session_id and raw_sid == current_session_id:
-            continue
-        if resolved_sid not in seen_sessions:
+        is_current = bool(
+            (current_lineage_root and resolved_sid == current_lineage_root)
+            or (current_session_id and raw_sid == current_session_id)
+        )
+        bucket = current_hits if is_current else other_hits
+        if resolved_sid not in bucket:
             row = dict(r)
             row["_lineage_root"] = resolved_sid
-            seen_sessions[resolved_sid] = row
+            row["_current_conversation"] = is_current
+            bucket[resolved_sid] = row
+
+    seen_sessions = {}
+    for lineage_root, row in list(current_hits.items()) + list(other_hits.items()):
+        seen_sessions[lineage_root] = row
         if len(seen_sessions) >= limit:
             break
 
@@ -478,6 +488,8 @@ def _discover(
             "messages_before": view.get("messages_before", 0),
             "messages_after": view.get("messages_after", 0),
         }
+        if match_info.get("_current_conversation"):
+            entry["current_conversation"] = True
         if lineage_root and lineage_root != hit_sid:
             entry["parent_session_id"] = lineage_root
         results.append(entry)
@@ -686,7 +698,11 @@ SESSION_SEARCH_SCHEMA = {
         "WHEN TO USE\n\n"
         "  Reach for this on questions about Hermes conversation history itself, such "
         "as \"what did we do about X\", \"where did we leave Y\", or \"find the "
-        "session where Z\". If the user provided a direct source identifier, inspect "
+        "session where Z\". A result with current_conversation=true is THIS chat, "
+        "including turns compacted out of the live context. Prefer it when the user "
+        "asks what they just asked, why you stopped, or whether you are done — do "
+        "not answer those from a different session. If the user provided a direct "
+        "source identifier, inspect "
         "that source first when accessible; session_search can then supply historical "
         "context. The session DB carries what was said when; external tools show "
         "current source/world state."

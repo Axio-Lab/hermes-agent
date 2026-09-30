@@ -206,11 +206,15 @@ class TestDiscoveryShape:
         result = json.loads(session_search(query="modpack", limit="bogus", db=db))
         assert result["success"] is True
 
-    def test_current_session_filtered_out(self, db):
+    def test_current_session_is_returned_first(self, db):
+        # Compaction can drop the live instruction while it is still stored in
+        # this lineage. "Why did you stop?" must be able to find it here
+        # instead of answering from a different chat.
         _seed_modpack_sessions(db)
         result = json.loads(session_search(query="modpack", db=db, current_session_id="s_newest"))
-        sids = [r["session_id"] for r in result["results"]]
-        assert "s_newest" not in sids
+        assert result["results"]
+        assert result["results"][0]["session_id"] == "s_newest"
+        assert result["results"][0]["current_conversation"] is True
 
 
 class TestDiscoverySort:
