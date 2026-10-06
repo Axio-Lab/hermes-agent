@@ -10102,38 +10102,20 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 "sender_name": str(getattr(source, "sender_name", None) or getattr(event, "sender_name", None) or ""),
                 "media_urls": [str(url) for url in (getattr(event, "media_urls", None) or []) if str(url).strip()],
             }
-            from gateway.verxio_workflow_hook import handle_verxio_workflow
-
-            verxio_result = await handle_verxio_workflow("agent:start", hook_ctx)
             await self.hooks.emit("agent:start", hook_ctx)
-            handled_hook = (
-                verxio_result
-                if isinstance(verxio_result, dict) and verxio_result.get("handled") is True
-                else None
+            agent_result = await self._run_agent(
+                message=message_text,
+                context_prompt=context_prompt,
+                history=history,
+                source=source,
+                session_id=session_entry.session_id,
+                session_key=session_key,
+                run_generation=run_generation,
+                event_message_id=self._reply_anchor_for_event(event),
+                channel_prompt=event.channel_prompt,
+                persist_user_message=persist_user_message,
+                persist_user_timestamp=persist_user_timestamp,
             )
-
-            if handled_hook is not None:
-                agent_result = {
-                    "api_calls": 0,
-                    "final_response": str(handled_hook.get("response") or ""),
-                    "messages": [],
-                    "stop_reason": str(handled_hook.get("source") or "gateway_hook"),
-                }
-            else:
-                # Run the default gateway agent when no trigger claimed the message.
-                agent_result = await self._run_agent(
-                    message=message_text,
-                    context_prompt=context_prompt,
-                    history=history,
-                    source=source,
-                    session_id=session_entry.session_id,
-                    session_key=session_key,
-                    run_generation=run_generation,
-                    event_message_id=self._reply_anchor_for_event(event),
-                    channel_prompt=event.channel_prompt,
-                    persist_user_message=persist_user_message,
-                    persist_user_timestamp=persist_user_timestamp,
-                )
 
             # Stop persistent typing indicator now that the agent is done
             try:
