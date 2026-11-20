@@ -60,8 +60,18 @@ def sanitize_gemini_schema(schema: Any) -> Dict[str, Any]:
                 props[prop_name] = sanitize_gemini_schema(prop_schema)
             cleaned[key] = props
             continue
+        if key == "type" and isinstance(value, list):
+            non_null = [item for item in value if isinstance(item, str) and item != "null"]
+            if len(non_null) == 1:
+                cleaned["type"] = non_null[0]
+                if "null" in value:
+                    cleaned["nullable"] = True
+            # A multi-type union is "any JSON value". Gemini Schema.type is a
+            # single enum, and picking one arm (often boolean) is wrong.
+            continue
         if key == "items":
-            cleaned[key] = sanitize_gemini_schema(value)
+            if isinstance(value, dict):
+                cleaned[key] = sanitize_gemini_schema(value)
             continue
         if key == "anyOf":
             if not isinstance(value, list):
@@ -86,6 +96,16 @@ def sanitize_gemini_schema(schema: Any) -> Dict[str, Any]:
     if isinstance(enum_val, list) and type_val in {"integer", "number", "boolean"}:
         if any(not isinstance(item, str) for item in enum_val):
             cleaned.pop("enum", None)
+
+    # Gemini allows Schema.items only when this schema's type is ARRAY.
+    # ``{type: boolean, items: {}}`` (and a type-union that still carries
+    # ``items``) fails with HTTP 400
+    # ``items.items: field predicate failed: $type == Type.ARRAY``.
+    # An empty item schema does not constrain the array, so omit it.
+    if type_val != "array":
+        cleaned.pop("items", None)
+    elif not cleaned.get("items"):
+        cleaned.pop("items", None)
 
     return cleaned
 

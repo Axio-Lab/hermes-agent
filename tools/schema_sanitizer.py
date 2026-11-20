@@ -17,6 +17,10 @@ The failure modes we've seen in the wild:
   (malformed MCP server output, e.g. ``additionalProperties: "object"``).
 * ``"type": ["string", "null"]`` array types — many converters only accept
   single-string ``type``.
+* A compact "any JSON value" union that lists every JSON type (boolean
+  first) plus ``items: {}``. Collapsing that to ``type: boolean`` and
+  keeping ``items`` makes Gemini reject the whole tool list with
+  ``items.items: $type == Type.ARRAY``.
 * ``anyOf`` / ``oneOf`` unions whose only purpose is to permit ``null`` for
   optional fields (common Pydantic/MCP shape). Anthropic rejects these at
   the top of ``input_schema``; collapse them to the non-null branch.
@@ -228,6 +232,20 @@ def strip_nullable_unions(
     return stripped
 
 
+def _is_unconstrained_json_union(types: list) -> bool:
+    """True when ``types`` lists every JSON kind, i.e. "any value".
+
+    REA's compact tool schemas advertise an unconstrained value as
+    ``["null", "boolean", "object", "array", "number", "string"]`` and attach
+    ``items: {}``. The first non-null entry is ``boolean``, so a naive
+    collapse tells the model the field is a boolean and leaves a nested
+    ``items`` Gemini rejects.
+    """
+    present = {t for t in types if isinstance(t, str)}
+    has_number = "number" in present or "integer" in present
+    return has_number and {"string", "boolean", "object", "array"} <= present
+
+
 def _sanitize_node(node: Any, path: str) -> Any:
     """Recursively sanitize a JSON-Schema fragment.
 
@@ -272,16 +290,18 @@ def _sanitize_node(node: Any, path: str) -> Any:
         # accepts singular string types; nullable is lost but the call still
         # succeeds, and the model can still pass null on its own.)
         if key == "type" and isinstance(value, list):
-            non_null = [t for t in value if t != "null"]
-            if len(non_null) == 1 and isinstance(non_null[0], str):
+            non_null = [t for t in value if isinstance(t, str) and t != "null"]
+            if len(non_null) == 1:
                 out["type"] = non_null[0]
                 if "null" in value:
                     out.setdefault("nullable", True)
                 continue
+            if _is_unconstrained_json_union(non_null):
+                # Leave type unset. ``items`` on this node is dropped below.
+                continue
             # Fallback: pick the first string type, drop the rest.
-            first_str = next((t for t in value if isinstance(t, str) and t != "null"), None)
-            if first_str:
-                out["type"] = first_str
+            if non_null:
+                out["type"] = non_null[0]
                 continue
             # All-null or empty list → treat as object.
             out["type"] = "object"
@@ -332,6 +352,15 @@ def _sanitize_node(node: Any, path: str) -> Any:
             out.pop("required", None)
         elif len(valid) != len(out["required"]):
             out["required"] = valid
+
+    # ``items`` is only valid on an array schema. Drop a leftover ``items``
+    # keyword from a collapsed non-array type, and drop the empty ``items: {}``
+    # marker on an unconstrained union. A real item schema with no explicit
+    # type (implicit array) is preserved for backends that accept it.
+    if "items" in out and out.get("type") != "array":
+        items = out.pop("items")
+        if out.get("type") is None and isinstance(items, dict) and items:
+            out["items"] = items
 
     return out
 

@@ -686,6 +686,59 @@ def test_strip_slash_enum_none_returns_zero():
     assert stripped == 0
 
 
+def test_rea_any_json_array_items_are_not_collapsed_to_boolean():
+    """REA compact schemas list every JSON type, boolean first, plus items: {}.
+
+    Collapsing that to ``{type: boolean, items: {}}`` makes Gemini 400 on
+    ``items.items`` and tells the model the array holds booleans.
+    """
+    tools = [_tool("mcp_rea_analyze_javascript_application", {
+        "type": "object",
+        "properties": {
+            "source_paths": {
+                "type": "array",
+                "items": {
+                    "type": ["null", "boolean", "object", "array", "number", "string"],
+                    "items": {},
+                },
+                "description": "Exact relevant file paths from the artifact inventory.",
+            },
+        },
+        "required": ["input_path"],
+    })]
+    out = sanitize_tool_schemas(tools)
+    prop = out[0]["function"]["parameters"]["properties"]["source_paths"]
+    assert prop["type"] == "array"
+    assert prop["description"].startswith("Exact relevant file paths")
+    items = prop.get("items", {})
+    assert items.get("type") != "boolean"
+    assert "items" not in items
+
+
+def test_two_type_union_still_keeps_the_first_concrete_type():
+    tools = [_tool("t", {
+        "type": "object",
+        "properties": {
+            "value": {"type": ["string", "number"]},
+        },
+    })]
+    out = sanitize_tool_schemas(tools)
+    prop = out[0]["function"]["parameters"]["properties"]["value"]
+    assert prop["type"] == "string"
+
+
+def test_string_array_items_are_preserved():
+    tools = [_tool("t", {
+        "type": "object",
+        "properties": {
+            "paths": {"type": "array", "items": {"type": "string"}},
+        },
+    })]
+    out = sanitize_tool_schemas(tools)
+    prop = out[0]["function"]["parameters"]["properties"]["paths"]
+    assert prop["items"] == {"type": "string"}
+
+
 def test_strip_slash_enum_ignores_non_string_enum_values():
     """Integer/boolean enum values can't contain '/' — leave them alone."""
     tools = [_tool("t", {

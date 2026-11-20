@@ -102,6 +102,43 @@ class TestSanitizeGeminiSchema:
         assert cleaned["items"]["type"] == "integer"
         assert "enum" not in cleaned["items"]
 
+    def test_rea_any_json_item_schema_drops_illegal_nested_items(self):
+        """The REA compact shape that Gemini 4 Argon rejected.
+
+        ``source_paths.items`` is an every-type union plus ``items: {}``.
+        Gemini only allows ``items`` when the parent type is ARRAY, so the
+        nested ``items`` on that union is INVALID_ARGUMENT.
+        """
+        schema = {
+            "type": "object",
+            "properties": {
+                "source_paths": {
+                    "type": "array",
+                    "description": "Exact relevant file paths from the artifact inventory.",
+                    "items": {
+                        "type": ["null", "boolean", "object", "array", "number", "string"],
+                        "items": {},
+                    },
+                },
+            },
+        }
+        cleaned = sanitize_gemini_schema(schema)
+        source_paths = cleaned["properties"]["source_paths"]
+        assert source_paths["type"] == "array"
+        assert source_paths["description"].startswith("Exact relevant file paths")
+        assert "items" not in source_paths
+
+    def test_boolean_item_with_nested_items_drops_the_nested_items(self):
+        """Safety net for the collapsed ``{type: boolean, items: {}}`` shape."""
+        schema = {
+            "type": "array",
+            "items": {"type": "boolean", "items": {}},
+        }
+        cleaned = sanitize_gemini_schema(schema)
+        assert cleaned["type"] == "array"
+        assert cleaned["items"] == {"type": "boolean"}
+        assert "items" not in cleaned["items"]
+
     def test_non_dict_input_returns_empty(self):
         assert sanitize_gemini_schema(None) == {}
         assert sanitize_gemini_schema("not a schema") == {}
