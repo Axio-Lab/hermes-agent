@@ -6,10 +6,14 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import subprocess
+import sys
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Sequence
+from xml.etree import ElementTree
 
 from agent.model_metadata import estimate_tokens_rough
 
@@ -109,6 +113,7 @@ def preprocess_context_references(
     context_length: int,
     url_fetcher: Callable[[str], str | Awaitable[str]] | None = None,
     allowed_root: str | Path | None = None,
+    allowed_roots: Sequence[str | Path] | None = None,
 ) -> ContextReferenceResult:
     coro = preprocess_context_references_async(
         message,
@@ -116,6 +121,7 @@ def preprocess_context_references(
         context_length=context_length,
         url_fetcher=url_fetcher,
         allowed_root=allowed_root,
+        allowed_roots=allowed_roots,
     )
     # Safe for both CLI (no loop) and gateway (loop already running).
     try:
@@ -136,6 +142,7 @@ async def preprocess_context_references_async(
     context_length: int,
     url_fetcher: Callable[[str], str | Awaitable[str]] | None = None,
     allowed_root: str | Path | None = None,
+    allowed_roots: Sequence[str | Path] | None = None,
 ) -> ContextReferenceResult:
     refs = parse_context_references(message)
     if not refs:
@@ -144,9 +151,16 @@ async def preprocess_context_references_async(
     cwd_path = Path(cwd).expanduser().resolve()
     # Default to the current working directory so @ references cannot escape
     # the active workspace unless a caller explicitly widens the root.
-    allowed_root_path = (
-        Path(allowed_root).expanduser().resolve() if allowed_root is not None else cwd_path
-    )
+    # ``allowed_roots`` adds directories the user attached (a picked folder
+    # outside the project) without opening the rest of the filesystem.
+    resolved_roots: list[Path] = []
+    for root in allowed_roots or []:
+        resolved = Path(root).expanduser().resolve()
+        if resolved not in resolved_roots:
+            resolved_roots.append(resolved)
+    primary = Path(allowed_root).expanduser().resolve() if allowed_root is not None else cwd_path
+    if primary not in resolved_roots:
+        resolved_roots.insert(0, primary)
     warnings: list[str] = []
     blocks: list[str] = []
     injected_tokens = 0
@@ -156,7 +170,7 @@ async def preprocess_context_references_async(
             ref,
             cwd_path,
             url_fetcher=url_fetcher,
-            allowed_root=allowed_root_path,
+            allowed_roots=resolved_roots,
         )
         if warning:
             warnings.append(warning)
@@ -208,13 +222,13 @@ async def _expand_reference(
     cwd: Path,
     *,
     url_fetcher: Callable[[str], str | Awaitable[str]] | None = None,
-    allowed_root: Path | None = None,
+    allowed_roots: Sequence[Path] | None = None,
 ) -> tuple[str | None, str | None]:
     try:
         if ref.kind == "file":
-            return _expand_file_reference(ref, cwd, allowed_root=allowed_root)
+            return _expand_file_reference(ref, cwd, allowed_roots=allowed_roots)
         if ref.kind == "folder":
-            return _expand_folder_reference(ref, cwd, allowed_root=allowed_root)
+            return _expand_folder_reference(ref, cwd, allowed_roots=allowed_roots)
         if ref.kind == "diff":
             return _expand_git_reference(ref, cwd, ["diff"], "git diff")
         if ref.kind == "staged":
@@ -233,18 +247,147 @@ async def _expand_reference(
     return f"{ref.raw}: unsupported reference type", None
 
 
+_DOCUMENT_TEXT_LIMIT = 80_000
+
+
+def _extract_document_text(path: Path) -> str | None:
+    """Pull readable text out of a PDF or Office file the user attached.
+
+    These types are binary to a plain read, so without this the model only
+    sees a path and tells the user it cannot review the file. Extraction is
+    best-effort: a failure falls back to the binary path block.
+    """
+    suffix = path.suffix.lower()
+    try:
+        if suffix == ".pdf":
+            text = _extract_pdf_text(path)
+        elif suffix == ".docx":
+            text = _extract_ooxml_part(path, "word/document.xml")
+        elif suffix == ".pptx":
+            text = _extract_pptx_text(path)
+        elif suffix == ".xlsx":
+            text = _extract_xlsx_text(path)
+        else:
+            return None
+    except Exception:
+        return None
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return None
+    if len(cleaned) > _DOCUMENT_TEXT_LIMIT:
+        cleaned = cleaned[:_DOCUMENT_TEXT_LIMIT].rstrip() + "\n\n[truncated]"
+    return cleaned
+
+
+def _extract_pdf_text(path: Path) -> str | None:
+    if shutil.which("pdftotext"):
+        result = subprocess.run(
+            ["pdftotext", "-layout", "-q", str(path), "-"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            stdin=subprocess.DEVNULL,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout
+    if sys.platform != "darwin":
+        return None
+    escaped = str(path).replace("\\", "\\\\").replace('"', '\\"')
+    script = (
+        'use framework "PDFKit"\n'
+        "set pdfDoc to current application's PDFDocument's alloc()'s "
+        f'initWithURL:(current application\'s NSURL\'s fileURLWithPath:"{escaped}")\n'
+        'if pdfDoc is missing value then error "unreadable pdf"\n'
+        "set pdfText to pdfDoc's |string|()\n"
+        'if pdfText is missing value then return ""\n'
+        "return pdfText as text\n"
+    )
+    result = subprocess.run(
+        ["osascript", "-e", script],
+        capture_output=True,
+        text=True,
+        timeout=45,
+        stdin=subprocess.DEVNULL,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
+def _ooxml_paragraphs(xml_bytes: bytes) -> str:
+    root = ElementTree.fromstring(xml_bytes)
+    paragraphs: list[str] = []
+    for para in root.iter():
+        if not str(para.tag).endswith("}p"):
+            continue
+        parts: list[str] = []
+        for node in para.iter():
+            tag = str(node.tag)
+            if tag.endswith("}t") and node.text:
+                parts.append(node.text)
+            elif tag.endswith("}tab"):
+                parts.append("\t")
+        line = "".join(parts).strip()
+        if line:
+            paragraphs.append(line)
+    return "\n".join(paragraphs)
+
+
+def _extract_ooxml_part(path: Path, member: str) -> str | None:
+    with zipfile.ZipFile(path) as archive:
+        try:
+            payload = archive.read(member)
+        except KeyError:
+            return None
+    return _ooxml_paragraphs(payload)
+
+
+def _extract_pptx_text(path: Path) -> str | None:
+    chunks: list[str] = []
+    with zipfile.ZipFile(path) as archive:
+        slides = sorted(
+            name for name in archive.namelist()
+            if name.startswith("ppt/slides/slide") and name.endswith(".xml")
+        )
+        for name in slides:
+            text = _ooxml_paragraphs(archive.read(name))
+            if text:
+                chunks.append(text)
+    return "\n\n".join(chunks) or None
+
+
+def _extract_xlsx_text(path: Path) -> str | None:
+    chunks: list[str] = []
+    with zipfile.ZipFile(path) as archive:
+        names = set(archive.namelist())
+        if "xl/sharedStrings.xml" in names:
+            shared = _ooxml_paragraphs(archive.read("xl/sharedStrings.xml"))
+            if shared:
+                chunks.append(shared)
+        sheets = sorted(name for name in names if name.startswith("xl/worksheets/sheet") and name.endswith(".xml"))
+        for name in sheets:
+            text = _ooxml_paragraphs(archive.read(name))
+            if text:
+                chunks.append(text)
+    return "\n\n".join(chunks) or None
+
+
 def _expand_file_reference(
     ref: ContextReference,
     cwd: Path,
     *,
-    allowed_root: Path | None = None,
+    allowed_roots: Sequence[Path] | None = None,
 ) -> tuple[str | None, str | None]:
-    path = _resolve_path(cwd, ref.target, allowed_root=allowed_root)
+    path = _resolve_path(cwd, ref.target, allowed_roots=allowed_roots)
     _ensure_reference_path_allowed(path)
     if not path.exists():
         return f"{ref.raw}: file not found", None
     if not path.is_file():
         return f"{ref.raw}: path is not a file", None
+    extracted = _extract_document_text(path)
+    if extracted:
+        label = ref.raw
+        return None, f"📄 {label} ({estimate_tokens_rough(extracted)} tokens)\n```\n{extracted}\n```"
     if _is_binary_file(path):
         # A binary file can't be inlined as text, but it IS on disk (the agent's
         # tools run where this resolves — the local cwd, or the staged copy in a
@@ -271,9 +414,9 @@ def _expand_folder_reference(
     ref: ContextReference,
     cwd: Path,
     *,
-    allowed_root: Path | None = None,
+    allowed_roots: Sequence[Path] | None = None,
 ) -> tuple[str | None, str | None]:
-    path = _resolve_path(cwd, ref.target, allowed_root=allowed_root)
+    path = _resolve_path(cwd, ref.target, allowed_roots=allowed_roots)
     _ensure_reference_path_allowed(path)
     if not path.exists():
         return f"{ref.raw}: folder not found", None
@@ -334,16 +477,24 @@ async def _default_url_fetcher(url: str) -> str:
     return str(doc.get("content") or doc.get("raw_content") or "").strip()
 
 
-def _resolve_path(cwd: Path, target: str, *, allowed_root: Path | None = None) -> Path:
+def _resolve_path(
+    cwd: Path,
+    target: str,
+    *,
+    allowed_roots: Sequence[Path] | None = None,
+) -> Path:
     path = Path(os.path.expanduser(target))
     if not path.is_absolute():
         path = cwd / path
     resolved = path.resolve()
-    if allowed_root is not None:
-        try:
-            resolved.relative_to(allowed_root)
-        except ValueError as exc:
-            raise ValueError("path is outside the allowed workspace") from exc
+    if allowed_roots:
+        for root in allowed_roots:
+            try:
+                resolved.relative_to(root)
+                return resolved
+            except ValueError:
+                continue
+        raise ValueError("path is outside the allowed workspace")
     return resolved
 
 
@@ -435,12 +586,23 @@ def _is_binary_file(path: Path) -> bool:
     return b"\x00" in chunk
 
 
+def _listing_anchor(path: Path, cwd: Path) -> Path:
+    """Directory ``relative_to`` can use. Attached folders may sit outside cwd."""
+    try:
+        path.relative_to(cwd)
+    except ValueError:
+        return path.parent
+    return cwd
+
+
 def _build_folder_listing(path: Path, cwd: Path, limit: int = 200) -> str:
-    lines = [f"{path.relative_to(cwd)}/"]
-    entries = _iter_visible_entries(path, cwd, limit=limit)
+    anchor = _listing_anchor(path, cwd)
+    header = path.relative_to(anchor)
+    lines = [f"{header}/"]
+    entries = _iter_visible_entries(path, anchor, limit=limit)
     for entry in entries:
-        rel = entry.relative_to(cwd)
-        indent = "  " * max(len(rel.parts) - len(path.relative_to(cwd).parts) - 1, 0)
+        rel = entry.relative_to(anchor)
+        indent = "  " * max(len(rel.parts) - len(header.parts) - 1, 0)
         if entry.is_dir():
             lines.append(f"{indent}- {entry.name}/")
         else:

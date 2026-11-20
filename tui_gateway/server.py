@@ -7226,10 +7226,16 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
                         agent, "_config_context_length", None
                     ),
                 )
+                granted_roots = [cwd]
+                for extra in session.get("granted_context_roots") or []:
+                    extra_text = str(extra or "").strip()
+                    if extra_text and extra_text not in granted_roots:
+                        granted_roots.append(extra_text)
                 ctx = preprocess_context_references(
                     prompt,
                     cwd=cwd,
                     allowed_root=cwd,
+                    allowed_roots=granted_roots,
                     context_length=ctx_len,
                 )
                 if ctx.blocked:
@@ -8094,6 +8100,36 @@ def _stage_session_file_attachment(
     target = _unique_attachment_path(upload_dir, _sanitize_attachment_name(filename))
     target.write_bytes(payload)
     return target.resolve(), True
+
+
+@method("context.grant")
+def _(rid, params: dict) -> dict:
+    """Allow one user-picked folder outside the session workspace.
+
+    File uploads are copied into the workspace. A picked folder is not copied.
+    Granting it lets ``@folder:`` / ``@file:`` references under that directory
+    expand for this session. Sensitive credential paths stay blocked.
+    """
+    session, err = _sess(params, rid)
+    if err:
+        return err
+    raw = str(params.get("path", "") or "").strip()
+    if not raw:
+        return _err(rid, 4015, "path required")
+    try:
+        resolved = Path(raw).expanduser().resolve()
+        if not resolved.is_dir():
+            return _err(rid, 4016, f"folder not found: {raw}")
+        from agent.context_references import _ensure_reference_path_allowed
+
+        _ensure_reference_path_allowed(resolved)
+    except Exception as exc:
+        return _err(rid, 5028, str(exc))
+    roots = session.setdefault("granted_context_roots", [])
+    text = str(resolved)
+    if text not in roots:
+        roots.append(text)
+    return _ok(rid, {"granted": True, "path": text})
 
 
 @method("file.attach")

@@ -308,6 +308,56 @@ def test_restricts_paths_to_allowed_root(tmp_path: Path):
     assert any("outside the allowed workspace" in warning for warning in result.warnings)
 
 
+def test_docx_attachment_inlines_document_text(tmp_path: Path):
+    import zipfile
+
+    from agent.context_references import preprocess_context_references
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    document = workspace / "resume.docx"
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:p><w:r><w:t>Superteam Talent</w:t></w:r></w:p></w:body>"
+        "</w:document>"
+    )
+    with zipfile.ZipFile(document, "w") as archive:
+        archive.writestr("word/document.xml", xml)
+
+    result = preprocess_context_references(
+        "@file:resume.docx",
+        cwd=workspace,
+        context_length=100_000,
+    )
+
+    assert "Superteam Talent" in result.message
+    assert "binary" not in result.message.lower()
+
+
+def test_granted_folder_is_readable_and_siblings_stay_blocked(tmp_path: Path):
+    from agent.context_references import preprocess_context_references
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    attached = tmp_path / "Desktop" / "notes"
+    attached.mkdir(parents=True)
+    (attached / "resume.txt").write_text("Prince\n", encoding="utf-8")
+    secret = tmp_path / "secret.txt"
+    secret.write_text("nope\n", encoding="utf-8")
+
+    result = preprocess_context_references(
+        f"see @file:{attached / 'resume.txt'} and @file:{secret}",
+        cwd=workspace,
+        context_length=100_000,
+        allowed_roots=[workspace, attached],
+    )
+
+    assert "Prince" in result.message
+    assert "nope" not in result.message
+    assert any("outside the allowed workspace" in warning for warning in result.warnings)
+
+
 def test_defaults_allowed_root_to_cwd(tmp_path: Path):
     from agent.context_references import preprocess_context_references
 
